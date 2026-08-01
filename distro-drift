@@ -267,7 +267,7 @@ sub "APT pins and preferences"
 f=0; for x in /etc/apt/preferences /etc/apt/preferences.d/*; do [ -f "$x" ] || continue; f=1
     printf '\n[%s]\n' "$x"; sed 's/^/    /' "$x"; done; [ "$f" = 0 ] && none
 sub "Third-party signing keys"
-ls /etc/apt/trusted.gpg.d/ /etc/apt/keyrings/ 2>/dev/null | sed 's/^/  /' || none
+find /etc/apt/trusted.gpg.d/ /etc/apt/keyrings/ -maxdepth 1 -type f 2>/dev/null | sed 's/^/  /' || none
 fi
 
 # ── 2 ──────────────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ sub "Local udev rules"
 for x in $(unowned /etc/udev/rules.d); do
     printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
 sub "Local initramfs-tools files"; unowned /etc/initramfs-tools 2>/dev/null | sed 's/^/  /' || none
-sub "DKMS"; command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | sed 's/^/  /' || none
+sub "DKMS"; { command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | sed 's/^/  /'; } || none
 fi
 
 # ── 6 ──────────────────────────────────────────────────────────────
@@ -387,10 +387,10 @@ for x in $(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly
 sub "User crontabs"
 for h in /home/*; do u=$(basename "$h")
     c=$(crontab -u "$u" -l 2>/dev/null | grep -vE '^\s*(#|$)')
-    [ -n "$c" ] && { echo "  $u:"; echo "$c" | sed 's/^/    /'; }; done
+    [ -n "$c" ] && { echo "  $u:"; echo "${c//^/    }"; }; done
 sub "Desktop autostart"
 for h in /home/*; do [ -d "$h/.config/autostart" ] || continue
-    echo "  $(basename "$h"):"; ls "$h/.config/autostart" 2>/dev/null | sed 's/^/    /'; done
+    echo "  $(basename "$h"):"; find "$h/.config/autostart" -maxdepth 1 2>/dev/null | sed 's/^/    /'; done
 sub "Added profile.d scripts"; unowned /etc/profile.d 2>/dev/null | sed 's/^/  /' || none
 fi
 
@@ -426,8 +426,8 @@ sub "AppImage"
 find /home /opt -maxdepth 4 -iname '*.appimage' 2>/dev/null | sed 's/^/  /' || none
 sub "pipx / cargo / npm globals"
 for h in /home/*; do u=$(basename "$h")
-    [ -d "$h/.local/pipx/venvs" ] && { echo "  pipx ($u):";  ls "$h/.local/pipx/venvs" | sed 's/^/    /'; }
-    [ -d "$h/.cargo/bin" ]        && { echo "  cargo ($u):"; ls "$h/.cargo/bin"        | sed 's/^/    /'; }
+    [ -d "$h/.local/pipx/venvs" ] && { echo "  pipx ($u):";  find "$h/.local/pipx/venvs" -maxdepth 1 2>/dev/null | sed 's/^/    /'; }
+    [ -d "$h/.cargo/bin" ]        && { echo "  cargo ($u):"; find "$h/.cargo/bin" -maxdepth 1 2>/dev/null | sed 's/^/    /'; }
 done
 command -v npm >/dev/null 2>&1 && { echo "  npm -g:"; npm ls -g --depth=0 2>/dev/null | sed 's/^/    /'; }
 sub "Manually selected alternatives"
@@ -469,7 +469,7 @@ case "$MODE" in
         fa=$(materialise "$a" "$TMP/a.txt")
         fb=$(materialise "$b" "$TMP/b.txt")
 
-        label() { [ "$1" = now ] && echo "current system state" || basename "$1"; }
+        label() { if [ "$1" = now ]; then echo "current system state"; else basename "$1"; fi; }
 
         echo "--- a: $(label "$a")"
         echo "+++ b: $(label "$b")"
