@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-08-01
 
 ### Added
 - `--diff` now accepts up to two snapshot references, git-style: no argument
@@ -16,7 +16,18 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Comparing two stored snapshots no longer requires root.
 - Exit status of `--diff` follows `diff(1)`: 0 identical, 1 differs, 2 error.
 - `DISTRO_DRIFT_SNAPDIR` overrides the snapshot directory (used by the tests).
+- `-v`/`--verbose` flag in section 2 to show all packages (including those that
+  differ only in version within official repos).
 - Section summary showing line counts for each requested section.
+
+### Changed
+- Section 2 (Packages not from official repositories): output now groups packages
+  into three categories — no known origin, third-party origins, and official-repo
+  version differences (hidden by default, shown with `-v`). **Reports from 1.0.x
+  will show large spurious diffs against 1.1.0 reports.**
+- Section 4 (Unowned files): extended noise filter to exclude NetworkManager
+  configs, gettext catalogs, manual pages, pkg-config files, and SSH host keys.
+  Added `generated (gpu-manager)` label for NVIDIA X11 configs in section 8.
 
 ## [1.0.0] - 2026-08-01
 
