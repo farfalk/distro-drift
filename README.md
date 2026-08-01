@@ -144,3 +144,7 @@ expected to fail on systems lacking a given tool or path. `pipefail` is on.
 Written for Debian/Ubuntu and derivatives (tested on Linux Mint 22.x). Depends
 only on coreutils, dpkg, apt and systemd. Optional tools are detected at
 runtime and skipped when absent.
+
+---
+
+AI disclosure: see [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
