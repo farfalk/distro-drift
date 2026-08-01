@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: -x
+        with:
+          scandir: '.'
+          additional_files: 'distro-drift'
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run tests
+        run: bats tests/
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install optional companions
+        run: sudo apt-get update && sudo apt-get install -y debsums
+      - name: Full run as root on a real Ubuntu system
+        run: sudo ./distro-drift --quick > report.txt
+      - name: Report is non-trivial
+        run: |
+          test "$(wc -l < report.txt)" -gt 40
+          grep -q "Third-party software sources" report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-report
+          path: report.txt

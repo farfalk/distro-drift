@@ -1,0 +1,5 @@
+*.txt
+!tests/**/*.txt
+*.swp
+.DS_Store
+snapshots/

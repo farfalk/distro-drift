@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+#
+# distro-drift — inventory everything that deviates from the stock distribution
+#
+# Read-only. Intended as preparation for a release upgrade, or just to find out
+# what past-you did to this machine.
+#
+#   sudo distro-drift              full report
+#   sudo distro-drift --save       store a dated snapshot
+#   sudo distro-drift --diff       compare the last snapshot against now
+#   sudo distro-drift --diff @2    compare an older snapshot against now
+#   sudo distro-drift --diff @3 @1 compare two stored snapshots
+#   distro-drift --help
+#
+# KNOWN LIMITATION
+#   Debian/Ubuntu have no formal way to distinguish "file shipped by a package"
+#   from "file legitimately generated at runtime" from "file the admin put
+#   there". cruft(-ng) approximates it with a hand-maintained ruleset that
+#   Debian's own documentation describes as neither exhaustive nor up to date.
+#   This tool produces an inventory to be read critically, not a verdict.
+#
+# NOTE ON `set -e`
+#   Deliberately NOT used. This script runs dozens of probes that are expected
+#   to fail on systems where a given tool or path is absent; aborting on the
+#   first failure would defeat its purpose. `pipefail` is on so that genuine
+#   pipeline errors still surface in the exit status of individual stages.
+
+set -o pipefail
+export LC_ALL=C
+
+VERSION="1.0.0"
+SNAPDIR="${DISTRO_DRIFT_SNAPDIR:-/var/lib/distro-drift}"
+SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
+SECTIONS="$SECTIONS_ALL"
+MODE="report"
+QUICK=0
+DIFF_A=""
+DIFF_B=""
+
+section_name() {
+    case "$1" in
+        1) echo "Third-party software sources" ;;
+        2) echo "Packages not from official repositories" ;;
+        3) echo "Modified package files" ;;
+        4) echo "Files not owned by any package" ;;
+        5) echo "Kernel, modules, boot" ;;
+        6) echo "systemd services" ;;
+        7) echo "Autostart and scheduling" ;;
+        8) echo "Graphics" ;;
+        9) echo "Software outside apt" ;;
+    esac
+}
+
+usage() {
+cat <<EOF
+distro-drift $VERSION — what changed relative to the stock distribution
+
+USAGE
+  sudo distro-drift [OPTIONS]
+
+OPTIONS
+  -s, --sections N[,N...]   Run only the listed sections (default: all)
+  -l, --list                List available sections and exit
+  -q, --quick               Skip slow scans (section 4 limited to /etc)
+      --save                Write a snapshot to $SNAPDIR
+      --diff [A] [B]        Compare snapshots. With no argument: latest vs now.
+                            With one: A vs now. With two: A vs B.
+      --snapshots           List stored snapshots with their references
+
+SNAPSHOT REFERENCES
+  Accepted anywhere a snapshot is expected, git-style:
+    @0, @1, @2 ...   by age, @0 = most recent  (like HEAD~N)
+    latest           same as @0
+    2026-08          date prefix; must match exactly one snapshot
+    2026-08-01-1430  full snapshot name, with or without .txt
+    ./some/file.txt  any path
+    now              the current system state (requires root)
+  -h, --help                This message
+  -V, --version             Print version
+
+EXAMPLES
+  sudo distro-drift --save          before a release upgrade
+  sudo distro-drift --diff          what changed since the last snapshot
+  sudo distro-drift --diff @3       what changed since the 4th-newest snapshot
+  distro-drift --diff @5 @1         compare two stored snapshots (no root needed)
+  sudo distro-drift -s 4 | less     only hand-added files
+  sudo distro-drift -s 1,2 -q       sources and packages, fast
+
+OPTIONAL COMPANION TOOLS (used when present)
+  debsums          checksum verification of package files
+  cruft-ng         non-packaged file analysis using Debian rulesets
+  apt-forktracer   packages whose version does not come from official repos
+
+TO TRACK FUTURE CHANGES rather than reconstruct them after the fact:
+  sudo apt install etckeeper     # version-controls /etc, hooks into apt
+EOF
+}
+
+# ── argument parsing ───────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)     usage; exit 0 ;;
+        -V|--version)  echo "distro-drift $VERSION"; exit 0 ;;
+        -l|--list)
+            for s in $SECTIONS_ALL; do printf '  %s  %s\n' "$s" "$(section_name "$s")"; done
+            exit 0 ;;
+        -q|--quick)    QUICK=1; shift ;;
+        -s|--sections)
+            [ -n "${2:-}" ] || { echo "--sections requires an argument" >&2; exit 2; }
+            SECTIONS=$(echo "$2" | tr ',' ' '); shift 2 ;;
+        --save)        MODE="save"; shift ;;
+        --snapshots)   MODE="snapshots"; shift ;;
+        --diff)
+            MODE="diff"
+            case "${2:-}" in -*|"") ;; *) DIFF_A="$2"; shift ;; esac
+            case "${2:-}" in -*|"") ;; *) DIFF_B="$2"; shift ;; esac
+            shift ;;
+        *) echo "Unknown option: $1" >&2; echo "Try: distro-drift --help" >&2; exit 2 ;;
+    esac
+done
+
+# ── snapshot references ────────────────────────────────────────────────
+# Snapshots listed newest first, so index 0 is the most recent.
+snapshot_list() { ls -1t "$SNAPDIR"/*.txt 2>/dev/null; }
+
+# resolve_ref REF -> absolute path on stdout, or empty + message on stderr
+resolve_ref() {
+    local ref="$1" n matches count
+
+    [ -n "$ref" ] || { snapshot_list | head -1; return; }
+
+    # an existing path wins over any other interpretation
+    if [ -f "$ref" ]; then printf '%s\n' "$ref"; return; fi
+
+    case "$ref" in
+        now)     echo "now"; return ;;
+        latest)  ref="@0" ;;
+    esac
+
+    # @N — by age
+    case "$ref" in
+        @[0-9]*)
+            n=${ref#@}
+            snapshot_list | sed -n "$((n + 1))p" | grep . || {
+                echo "distro-drift: no snapshot at $ref (only $(snapshot_list | wc -l) stored)" >&2
+                return 1
+            }
+            return ;;
+    esac
+
+    # bare name, with or without .txt
+    [ -f "$SNAPDIR/$ref" ]     && { printf '%s\n' "$SNAPDIR/$ref";     return; }
+    [ -f "$SNAPDIR/$ref.txt" ] && { printf '%s\n' "$SNAPDIR/$ref.txt"; return; }
+
+    # prefix match — must be unambiguous
+    matches=$(snapshot_list | grep -F "/$ref")
+    count=$(printf '%s' "$matches" | grep -c . )
+    if [ "$count" -eq 1 ]; then
+        printf '%s\n' "$matches"; return
+    elif [ "$count" -gt 1 ]; then
+        echo "distro-drift: '$ref' is ambiguous, matches $count snapshots:" >&2
+        printf '%s\n' "$matches" | sed 's#.*/#  #' >&2
+        return 1
+    fi
+
+    echo "distro-drift: no snapshot matching '$ref'" >&2
+    echo "  see:  distro-drift --snapshots" >&2
+    return 1
+}
+
+if [ "$MODE" = snapshots ]; then
+    if [ -d "$SNAPDIR" ] && snapshot_list | grep -q .; then
+        printf '  %-6s %-22s %8s  %s\n' REF NAME SIZE AGE
+        i=0
+        while read -r f; do
+            printf '  %-6s %-22s %8s  %s days ago\n' \
+                "@$i" "$(basename "$f" .txt)" \
+                "$(du -h "$f" | cut -f1)" \
+                "$(( ( $(date +%s) - $(stat -c %Y "$f") ) / 86400 ))"
+            i=$((i + 1))
+        done < <(snapshot_list)
+        echo
+        echo "  Use a REF with --diff, e.g.:  distro-drift --diff @2"
+    else
+        echo "No snapshots stored yet.  Run: sudo distro-drift --save"
+    fi
+    exit 0
+fi
+
+# Comparing two stored snapshots needs no root: nothing is generated.
+NEEDS_ROOT=1
+if [ "$MODE" = diff ] && [ -n "$DIFF_B" ] && [ "$DIFF_A" != now ] && [ "$DIFF_B" != now ]; then
+    NEEDS_ROOT=0
+fi
+if [ "$NEEDS_ROOT" = 1 ] && [ "$(id -u)" -ne 0 ]; then
+    echo "distro-drift must run as root: sudo distro-drift" >&2
+    echo "  (comparing two stored snapshots does not need root)" >&2
+    exit 1
+fi
+
+TMP=$(mktemp -d) || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+want() { case " $SECTIONS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+sec()  { printf '\n\n═══════════════════════════════════════════════════════\n %s. %s\n═══════════════════════════════════════════════════════\n' "$1" "$(section_name "$1")"; }
+sub()  { printf '\n--- %s ---\n' "$*"; }
+none() { echo "  (none)"; }
+age()  { echo $(( ( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) ) / 86400 )); }
+
+# usrmerge normalisation: dpkg records some paths as /bin/... and others as
+# /usr/bin/.... Without this we get hundreds of false positives.
+norm() { sed -E 's#^/bin/#/usr/bin/#; s#^/sbin/#/usr/sbin/#; s#^/lib/#/usr/lib/#'; }
+
+build_index() {
+    cat /var/lib/dpkg/info/*.list 2>/dev/null | norm > "$TMP/idx"
+    # diverted files and alternatives do not appear in any .list
+    dpkg-divert --list 2>/dev/null | awk '{print $NF}' >> "$TMP/idx"
+    update-alternatives --get-selections 2>/dev/null | awk '{print $3}' >> "$TMP/idx"
+    sort -u "$TMP/idx" > "$TMP/pkgfiles"
+}
+in_pkg()  { grep -qxF "$(echo "$1" | norm)" "$TMP/pkgfiles"; }
+unowned() {
+    find "$@" -xdev -type f 2>/dev/null | norm | sort -u > "$TMP/disk"
+    comm -23 "$TMP/disk" "$TMP/pkgfiles" | grep -vEf "$TMP/noise"
+}
+
+# Known runtime noise. Edit freely — this is the tuning knob of the tool.
+write_noise_filter() {
+cat > "$TMP/noise" <<'EOF'
+^/etc/(mtab|adjtime|machine-id|hostname|hosts|resolv\.conf)$
+^/etc/(shadow|gshadow|passwd|group|subuid|subgid)(-|\.org)?$
+^/etc/ssl/certs/
+^/etc/ca-certificates
+^/etc/fonts/.*cache
+^/etc/X11/fontpath
+^/etc/\.git
+^/etc/.*-$
+\.pyc$
+/__pycache__/
+^/usr/share/(applications/mimeinfo\.cache|mime/|icons/.*/icon-theme\.cache)
+^/usr/lib/(modules|firmware)/
+^/usr/local/lib/python.*/(dist|site)-packages/
+EOF
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+run_report() {
+echo "distro-drift $VERSION — $(date -Is)"
+echo "host: $(hostname)   kernel: $(uname -r)   arch: $(dpkg --print-architecture 2>/dev/null)"
+# shellcheck disable=SC1091
+[ -r /etc/os-release ] && . /etc/os-release && echo "distro: ${PRETTY_NAME:-unknown}"
+[ -r /etc/linuxmint/info ] && grep -E "^(RELEASE|CODENAME|BASE_CODENAME)=" /etc/linuxmint/info | sed 's/^/  /'
+build_index
+write_noise_filter
+echo "dpkg index: $(wc -l < "$TMP/pkgfiles") known paths   sections: $SECTIONS"
+
+# ── 1 ──────────────────────────────────────────────────────────────
+if want 1; then sec 1
+sub "Additional repositories"
+f=0; for x in /etc/apt/sources.list.d/*; do [ -f "$x" ] || continue; f=1
+    printf '\n[%s]  last modified %s days ago\n' "$(basename "$x")" "$(age "$x")"
+    grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done; [ "$f" = 0 ] && none
+sub "Active lines in sources.list"
+grep -vE '^\s*(#|$)' /etc/apt/sources.list 2>/dev/null | sed 's/^/  /' || none
+sub "APT pins and preferences"
+f=0; for x in /etc/apt/preferences /etc/apt/preferences.d/*; do [ -f "$x" ] || continue; f=1
+    printf '\n[%s]\n' "$x"; sed 's/^/    /' "$x"; done; [ "$f" = 0 ] && none
+sub "Third-party signing keys"
+ls /etc/apt/trusted.gpg.d/ /etc/apt/keyrings/ 2>/dev/null | sed 's/^/  /' || none
+fi
+
+# ── 2 ──────────────────────────────────────────────────────────────
+if want 2; then sec 2
+if command -v apt-forktracer >/dev/null 2>&1; then
+    sub "apt-forktracer  (package / installed / available in repos)"
+    apt-forktracer 2>/dev/null | sed 's/^/  /' || none
+else
+    sub "Heuristic  (install apt-forktracer for a better answer)"
+    apt list --installed 2>/dev/null | tail -n +2 | while IFS= read -r line; do
+        p=${line%%/*}; v=$(echo "$line" | awk '{print $2}')
+        o=$(apt-cache policy "$p" 2>/dev/null | awk -v v="$v" '
+            $1==v {f=1; next}
+            f && /https?:\/\// {print $2; exit}
+            f && /\/var\/lib\/dpkg\/status/ {print "LOCAL-or-external-deb"; exit}')
+        case "$o" in
+            *ubuntu.com*|*linuxmint.com*|*debian.org*|"") ;;
+            *) printf '  %-40s %-24s %s\n' "$p" "$v" "$o" ;;
+        esac
+    done
+fi
+sub "Packages in an abnormal state"
+dpkg -l 2>/dev/null | awk 'NR>5 && $1!="ii" {print "  " $1 "  " $2}' || none
+sub "Held packages"
+apt-mark showhold 2>/dev/null | sed 's/^/  /' || none
+sub "Explicitly installed (not pulled in as dependencies)"
+apt-mark showmanual 2>/dev/null | tr '\n' ' ' | fold -s -w 96 | sed 's/^/  /'
+fi
+
+# ── 3 ──────────────────────────────────────────────────────────────
+if want 3; then sec 3
+sub "dpkg --verify   (trailing 'c' means config file — modification expected)"
+dpkg --verify 2>/dev/null | sed 's/^/  /' || none
+if command -v debsums >/dev/null 2>&1; then
+    sub "debsums: modified config files"
+    debsums -ec 2>/dev/null | sed 's/^/  /' || none
+    sub "debsums: modified non-config files  (more suspicious)"
+    debsums -c 2>/dev/null | sed 's/^/  /' || none
+else
+    sub "debsums not installed"; echo "  sudo apt install debsums"
+fi
+sub "Leftover merge artefacts (.dpkg-old, .ucf-*)"
+find /etc /usr \( -name '*.dpkg-*' -o -name '*.ucf-*' \) 2>/dev/null | sed 's/^/  /' || none
+fi
+
+# ── 4 ──────────────────────────────────────────────────────────────
+if want 4; then sec 4
+echo
+echo "  Nothing here will be preserved or migrated by a release upgrade —"
+echo "  it is all hand-added, by you or by an installer script. Newest first."
+echo "  Contains false positives: read it, do not delete from it blindly."
+show() { sub "$1"; shift
+    unowned "$@" | while read -r x; do printf '  %5sd  %s\n' "$(age "$x")" "$x"; done | sort -n | tac
+}
+show "/etc" /etc
+if [ "$QUICK" = 0 ]; then
+    show "/usr/bin and /usr/sbin  (scripts hiding among system binaries)" /usr/bin /usr/sbin /bin /sbin
+    show "/usr/local" /usr/local
+    show "/opt" /opt
+    show "/srv" /srv
+else
+    echo; echo "  (--quick: skipped /usr, /opt, /srv)"
+fi
+if command -v cruft-ng >/dev/null 2>&1; then
+    sub "cruft-ng  (Debian rulesets; expect false positives — see upstream docs)"
+    cruft-ng 2>/dev/null | head -100 | sed 's/^/  /'
+elif command -v cruft >/dev/null 2>&1; then
+    sub "cruft"; cruft 2>/dev/null | head -100 | sed 's/^/  /'
+else
+    sub "cruft-ng not installed"; echo "  sudo apt install cruft-ng"
+fi
+fi
+
+# ── 5 ──────────────────────────────────────────────────────────────
+if want 5; then sec 5
+sub "Active kernel command line"; sed 's/^/  /' /proc/cmdline
+sub "GRUB"; grep -vE '^\s*(#|$)' /etc/default/grub 2>/dev/null | sed 's/^/  /' || none
+sub "Installed kernels"; dpkg -l 'linux-image-*' 2>/dev/null | awk '$1=="ii"{print "  " $2 "  " $3}'
+sub "Local modprobe.d entries"
+for x in $(unowned /etc/modprobe.d /lib/modprobe.d); do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+sub "Local sysctl settings"
+for x in $(unowned /etc/sysctl.d) /etc/sysctl.conf; do [ -f "$x" ] || continue
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+sub "Local udev rules"
+for x in $(unowned /etc/udev/rules.d); do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+sub "Local initramfs-tools files"; unowned /etc/initramfs-tools 2>/dev/null | sed 's/^/  /' || none
+sub "DKMS"; command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | sed 's/^/  /' || none
+fi
+
+# ── 6 ──────────────────────────────────────────────────────────────
+if want 6; then sec 6
+sub "Enabled units not owned by any package"
+systemctl list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null \
+| awk '{print $1}' | while read -r u; do
+    p=$(systemctl show -p FragmentPath --value "$u" 2>/dev/null)
+    [ -n "$p" ] && { in_pkg "$p" || echo "  $u  ->  $p"; }
+done
+sub "Masked units"
+systemctl list-unit-files --state=masked --no-legend --no-pager 2>/dev/null | sed 's/^/  /' || none
+sub "Overrides and drop-ins under /etc/systemd"
+for x in $(unowned /etc/systemd); do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+sub "User units"
+for h in /home/*; do [ -d "$h/.config/systemd/user" ] || continue
+    echo "  $(basename "$h"):"; find "$h/.config/systemd/user" -type f 2>/dev/null | sed 's/^/    /'; done
+sub "Currently failed units"
+systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/  /' || none
+fi
+
+# ── 7 ──────────────────────────────────────────────────────────────
+if want 7; then sec 7
+sub "System cron"
+for x in $(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly) /etc/crontab; do
+    [ -f "$x" ] || continue; printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+sub "User crontabs"
+for h in /home/*; do u=$(basename "$h")
+    c=$(crontab -u "$u" -l 2>/dev/null | grep -vE '^\s*(#|$)')
+    [ -n "$c" ] && { echo "  $u:"; echo "$c" | sed 's/^/    /'; }; done
+sub "Desktop autostart"
+for h in /home/*; do [ -d "$h/.config/autostart" ] || continue
+    echo "  $(basename "$h"):"; ls "$h/.config/autostart" 2>/dev/null | sed 's/^/    /'; done
+sub "Added profile.d scripts"; unowned /etc/profile.d 2>/dev/null | sed 's/^/  /' || none
+fi
+
+# ── 8 ──────────────────────────────────────────────────────────────
+if want 8; then sec 8
+sub "Xorg configuration"
+for x in /etc/X11/xorg.conf /etc/X11/xorg.conf.d/* /usr/share/X11/xorg.conf.d/*; do
+    [ -f "$x" ] || continue
+    if in_pkg "$x"; then
+        o=$(dpkg -S "$x" 2>/dev/null | cut -d: -f1); st="package: $o"
+        dpkg --verify "$o" 2>/dev/null | grep -q "$x" && st="$st   ** MODIFIED **"
+    else
+        st="HAND-ADDED"
+    fi
+    printf '\n[%s]  %s\n' "$x" "$st"
+    grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done
+sub "Current graphics state"
+command -v prime-select >/dev/null 2>&1 && echo "  prime-select: $(prime-select query 2>/dev/null)"
+if pgrep -x Xorg >/dev/null 2>&1; then
+    echo "  loaded DDX modules:"
+    grep -aoE "[a-z]+_drv\.so" "/proc/$(pgrep -x Xorg | head -1)/maps" 2>/dev/null | sort -u | sed 's/^/    /'
+fi
+fi
+
+# ── 9 ──────────────────────────────────────────────────────────────
+if want 9; then sec 9
+sub "Flatpak"
+command -v flatpak >/dev/null 2>&1 && flatpak list --columns=application,origin 2>/dev/null | sed 's/^/  /' || echo "  (not installed)"
+sub "Snap"
+command -v snap >/dev/null 2>&1 && snap list 2>/dev/null | sed 's/^/  /' || echo "  (not installed)"
+sub "AppImage"
+find /home /opt -maxdepth 4 -iname '*.appimage' 2>/dev/null | sed 's/^/  /' || none
+sub "pipx / cargo / npm globals"
+for h in /home/*; do u=$(basename "$h")
+    [ -d "$h/.local/pipx/venvs" ] && { echo "  pipx ($u):";  ls "$h/.local/pipx/venvs" | sed 's/^/    /'; }
+    [ -d "$h/.cargo/bin" ]        && { echo "  cargo ($u):"; ls "$h/.cargo/bin"        | sed 's/^/    /'; }
+done
+command -v npm >/dev/null 2>&1 && { echo "  npm -g:"; npm ls -g --depth=0 2>/dev/null | sed 's/^/    /'; }
+sub "Manually selected alternatives"
+update-alternatives --get-selections 2>/dev/null | awk '$2=="manual"{print "  " $1 " -> " $3}' || none
+fi
+
+printf '\n\nDone — %s\n' "$(date -Is)"
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+case "$MODE" in
+    report) run_report ;;
+    save)
+        mkdir -p "$SNAPDIR"
+        out="$SNAPDIR/$(date +%F-%H%M).txt"
+        run_report > "$out"
+        chmod 600 "$out"
+        echo "Snapshot written: $out"
+        echo "Compare later with:  sudo distro-drift --diff"
+        echo "List references:     distro-drift --snapshots"
+        echo "Keep a copy OFF this machine."
+        ;;
+    diff)
+        # With one operand (or none) the right-hand side is the current state.
+        if [ -z "$DIFF_B" ]; then DIFF_B="now"; fi
+
+        a=$(resolve_ref "$DIFF_A") || exit 1
+        b=$(resolve_ref "$DIFF_B") || exit 1
+
+        if [ -z "$a" ]; then
+            echo "No snapshot to compare against. Run: sudo distro-drift --save" >&2
+            exit 1
+        fi
+
+        materialise() {   # "now" -> generated report; otherwise the file itself
+            if [ "$1" = now ]; then run_report > "$2"; printf '%s\n' "$2"
+            else printf '%s\n' "$1"; fi
+        }
+        fa=$(materialise "$a" "$TMP/a.txt")
+        fb=$(materialise "$b" "$TMP/b.txt")
+
+        label() { [ "$1" = now ] && echo "current system state" || basename "$1"; }
+
+        echo "--- a: $(label "$a")"
+        echo "+++ b: $(label "$b")"
+        echo "  '<' only in a    '>' only in b"
+        echo
+        # drop header lines that change on every run and would mask real drift
+        strip() { grep -vE '^(distro-drift [0-9]|Done —|dpkg index|host: )'; }
+        diff <(strip < "$fa") <(strip < "$fb")
+        rc=$?
+        [ "$rc" -eq 0 ] && echo "  (identical)"
+        exit "$rc"
+        ;;
+esac

@@ -1,0 +1,5 @@
+# Follow sourced files where possible
+external-sources=true
+
+# SC1091: /etc/os-release is sourced conditionally and is not present at lint time
+disable=SC1091
