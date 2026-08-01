@@ -4,6 +4,13 @@
 # The report itself needs root and a real dpkg database, so it is not
 # unit-tested here — CI only guarantees that the CLI surface behaves.
 
+setup_file() {
+    # Use Bats' temporary directory for test snapshots
+    # This ensures tests never write to /var/lib/distro-drift
+    export DISTRO_DRIFT_SNAPDIR="$BATS_TMPDIR/distro-drift-snapdir"
+    mkdir -p "$DISTRO_DRIFT_SNAPDIR"
+}
+
 setup() {
     DD="${BATS_TEST_DIRNAME}/../distro-drift"
 }
