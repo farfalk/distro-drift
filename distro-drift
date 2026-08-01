@@ -345,14 +345,8 @@ build_index
 write_noise_filter
 echo "dpkg index: $(wc -l < "$TMP/pkgfiles") known paths   sections: $SECTIONS"
 
-# T3: Per-section line counts
-for s in $SECTIONS_ALL; do
-    > "$TMP/section.$s"
-done
-
 # ── 1 ──────────────────────────────────────────────────────────────
-if want 1; then 
-    { sec 1
+if want 1; then sec 1
 sub "Additional repositories"
 f=0; for x in /etc/apt/sources.list.d/*; do [ -f "$x" ] || continue; f=1
     printf '\n[%s]  last modified %s days ago\n' "$(basename "$x")" "$(age "$x")"

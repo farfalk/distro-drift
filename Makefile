@@ -10,7 +10,7 @@ help:
 	@echo "make install    install to $(BINDIR)/$(SCRIPT)  (needs sudo)"
 	@echo "make uninstall  remove it"
 	@echo "make lint       run shellcheck"
-	@echo "make test       run bats tests (sets DISTRO_DRIFT_SNAPDIR to temp dir)"
+	@echo "make test       run bats tests"
 	@echo "make check      lint + test"
 	@echo "make version    print the version in the script"
 
