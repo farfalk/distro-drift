@@ -227,6 +227,17 @@ unowned() {
     comm -23 "$TMP/disk" "$TMP/pkgfiles" | grep -vEf "$TMP/noise"
 }
 
+# T3: Print section line count summary
+print_section_summary() {
+    echo
+    echo "Section summary:"
+    for s in $SECTIONS; do
+        count=$(wc -l < "$TMP/section.$s")
+        printf '   %s  %s  %s lines\n' "$s" "$(section_name "$s")" "$count"
+    done
+    echo
+}
+
 # Known runtime noise. Edit freely — this is the tuning knob of the tool.
 write_noise_filter() {
 cat > "$TMP/noise" <<'EOF'
@@ -345,7 +356,14 @@ build_index
 write_noise_filter
 echo "dpkg index: $(wc -l < "$TMP/pkgfiles") known paths   sections: $SECTIONS"
 
+# T3: buffer section output for line count summary
+for s in $SECTIONS; do
+    touch "$TMP/section.$s"
+done
+exec 3>&1
+
 # ── 1 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.1" 2>&1
 if want 1; then sec 1
 sub "Additional repositories"
 f=0; for x in /etc/apt/sources.list.d/*; do [ -f "$x" ] || continue; f=1
@@ -360,8 +378,10 @@ f=0; for x in /etc/apt/preferences /etc/apt/preferences.d/*; do [ -f "$x" ] || c
 sub "Third-party signing keys"
 find /etc/apt/trusted.gpg.d/ /etc/apt/keyrings/ -maxdepth 1 -type f 2>/dev/null | sed 's/^/  /' || none
 fi
+exec >&3 2>&1
 
 # ── 2 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.2" 2>&1
 if want 2; then sec 2
 if command -v apt-forktracer >/dev/null 2>&1; then
     apt-forktracer 2>/dev/null | filter_forktracer
@@ -389,8 +409,10 @@ apt-mark showhold 2>/dev/null | sed 's/^/  /' || none
 sub "Explicitly installed (not pulled in as dependencies)"
 apt-mark showmanual 2>/dev/null | tr '\n' ' ' | fold -s -w 96 | sed 's/^/  /'
 fi
+exec >&3 2>&1
 
 # ── 3 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.3" 2>&1
 if want 3; then sec 3
 sub "dpkg --verify   (trailing 'c' means config file — modification expected)"
 dpkg --verify 2>/dev/null | sed 's/^/  /' || none
@@ -405,8 +427,10 @@ fi
 sub "Leftover merge artefacts (.dpkg-old, .ucf-*)"
 find /etc /usr \( -name '*.dpkg-*' -o -name '*.ucf-*' \) 2>/dev/null | sed 's/^/  /' || none
 fi
+exec >&3 2>&1
 
 # ── 4 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.4" 2>&1
 if want 4; then sec 4
 echo
 echo "  Nothing here will be preserved or migrated by a release upgrade —"
@@ -433,8 +457,10 @@ else
     sub "cruft-ng not installed"; echo "  sudo apt install cruft-ng"
 fi
 fi
+exec >&3 2>&1
 
 # ── 5 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.5" 2>&1
 if want 5; then sec 5
 sub "Active kernel command line"; sed 's/^/  /' /proc/cmdline
 sub "GRUB"; grep -vE '^\s*(#|$)' /etc/default/grub 2>/dev/null | sed 's/^/  /' || none
@@ -451,8 +477,10 @@ for x in $(unowned /etc/udev/rules.d); do
 sub "Local initramfs-tools files"; unowned /etc/initramfs-tools 2>/dev/null | sed 's/^/  /' || none
 sub "DKMS"; { command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | sed 's/^/  /'; } || none
 fi
+exec >&3 2>&1
 
 # ── 6 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.6" 2>&1
 if want 6; then sec 6
 sub "Enabled units not owned by any package"
 systemctl list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null \
@@ -471,8 +499,10 @@ for h in /home/*; do [ -d "$h/.config/systemd/user" ] || continue
 sub "Currently failed units"
 systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/  /' || none
 fi
+exec >&3 2>&1
 
 # ── 7 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.7" 2>&1
 if want 7; then sec 7
 sub "System cron"
 for x in $(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly) /etc/crontab; do
@@ -486,8 +516,10 @@ for h in /home/*; do [ -d "$h/.config/autostart" ] || continue
     echo "  $(basename "$h"):"; find "$h/.config/autostart" -maxdepth 1 2>/dev/null | sed 's/^/    /'; done
 sub "Added profile.d scripts"; unowned /etc/profile.d 2>/dev/null | sed 's/^/  /' || none
 fi
+exec >&3 2>&1
 
 # ── 8 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.8" 2>&1
 if want 8; then sec 8
 sub "Xorg configuration"
 for x in /etc/X11/xorg.conf /etc/X11/xorg.conf.d/* /usr/share/X11/xorg.conf.d/*; do
@@ -511,8 +543,10 @@ if pgrep -x Xorg >/dev/null 2>&1; then
     grep -aoE "[a-z]+_drv\.so" "/proc/$(pgrep -x Xorg | head -1)/maps" 2>/dev/null | sort -u | sed 's/^/    /'
 fi
 fi
+exec >&3 2>&1
 
 # ── 9 ──────────────────────────────────────────────────────────────
+exec > "$TMP/section.9" 2>&1
 if want 9; then sec 9
 sub "Flatpak"
 command -v flatpak >/dev/null 2>&1 && flatpak list --columns=application,origin 2>/dev/null | sed 's/^/  /' || echo "  (not installed)"
@@ -529,6 +563,16 @@ command -v npm >/dev/null 2>&1 && { echo "  npm -g:"; npm ls -g --depth=0 2>/dev
 sub "Manually selected alternatives"
 update-alternatives --get-selections 2>/dev/null | awk '$2=="manual"{print "  " $1 " -> " $3}' || none
 fi
+exec >&3 2>&1
+
+# T3: print section summary
+print_section_summary
+
+# Output all buffered sections
+for s in $SECTIONS; do
+    cat "$TMP/section.$s"
+done
+exec 3>&-
 
 printf '\n\nDone — %s\n' "$(date -Is)"
 }

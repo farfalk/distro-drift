@@ -16,6 +16,7 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Comparing two stored snapshots no longer requires root.
 - Exit status of `--diff` follows `diff(1)`: 0 identical, 1 differs, 2 error.
 - `DISTRO_DRIFT_SNAPDIR` overrides the snapshot directory (used by the tests).
+- Section summary showing line counts for each requested section.
 
 ## [1.0.0] - 2026-08-01
 
