@@ -277,7 +277,7 @@ EOF
 
 # Filter apt-forktracer output into three groups per T1
 filter_forktracer() {
-    local group1="" group2="" group3=""
+    local group1="" group2=""
     local g1_count=0 g2_count=0 g3_count=0
     
     while IFS= read -r line; do
