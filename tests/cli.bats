@@ -145,3 +145,9 @@ setup_fake_snapshots() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"identical"* ]]
 }
+
+@test "-v flag is accepted and does not error" {
+    run "$DD" -v --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"verbose"* ]]
+}

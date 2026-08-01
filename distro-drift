@@ -34,6 +34,7 @@ SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
 SECTIONS="$SECTIONS_ALL"
 MODE="report"
 QUICK=0
+VERBOSE=0
 DIFF_A=""
 DIFF_B=""
 
@@ -62,6 +63,7 @@ OPTIONS
   -s, --sections N[,N...]   Run only the listed sections (default: all)
   -l, --list                List available sections and exit
   -q, --quick               Skip slow scans (section 4 limited to /etc)
+  -v, --verbose             Show full output in section 2 (hidden by default)
       --save                Write a snapshot to $SNAPDIR
       --diff [A] [B]        Compare snapshots. With no argument: latest vs now.
                             With one: A vs now. With two: A vs B.
@@ -105,6 +107,7 @@ while [ $# -gt 0 ]; do
             for s in $SECTIONS_ALL; do printf '  %s  %s\n' "$s" "$(section_name "$s")"; done
             exit 0 ;;
         -q|--quick)    QUICK=1; shift ;;
+        -v|--verbose)  VERBOSE=1; shift ;;
         -s|--sections)
             [ -n "${2:-}" ] || { echo "--sections requires an argument" >&2; exit 2; }
             SECTIONS=$(echo "$2" | tr ',' ' '); shift 2 ;;
@@ -227,20 +230,108 @@ unowned() {
 # Known runtime noise. Edit freely — this is the tuning knob of the tool.
 write_noise_filter() {
 cat > "$TMP/noise" <<'EOF'
+# System-generated identification files
 ^/etc/(mtab|adjtime|machine-id|hostname|hosts|resolv\.conf)$
+
+# System user/group databases
 ^/etc/(shadow|gshadow|passwd|group|subuid|subgid)(-|\.org)?$
+
+# SSL certificate stores
 ^/etc/ssl/certs/
 ^/etc/ca-certificates
+
+# Font caches
 ^/etc/fonts/.*cache
 ^/etc/X11/fontpath
+
+# Git tracking (if installed)
 ^/etc/\.git
+
+# Temporary/backup files
 ^/etc/.*-$
 \.pyc$
 /__pycache__/
+
+# MIME and icon caches
 ^/usr/share/(applications/mimeinfo\.cache|mime/|icons/.*/icon-theme\.cache)
+
+# Kernel modules and firmware
 ^/usr/lib/(modules|firmware)/
+
+# Python locally installed packages
 ^/usr/local/lib/python.*/(dist|site)-packages/
+
+# NetworkManager-generated per-connection config (one per network seen)
+^/etc/netplan/90-NM-[0-9a-f-]+\.yaml$
+
+# gettext message catalogs from "make install"
+^/usr/local/share/locale/
+
+# Manual pages and pkg-config files from "make install"
+^/usr/local/(share/man|lib/pkgconfig)/
+
+# SSH host keys
+^/etc/ssh/ssh_host_
 EOF
+}
+
+# Filter apt-forktracer output into three groups per T1
+filter_forktracer() {
+    local group1="" group2="" group3=""
+    local g1_count=0 g2_count=0 g3_count=0
+    
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        # Extract all origin names from brackets like [OriginName: ...]
+        local origins
+        origins=$(echo "$line" | grep -oE '\[[A-Za-z][A-Za-z- ]*:' | tr -d '[]:')
+        
+        if [ -z "$origins" ]; then
+            # Group 1: no origin at all
+            group1="${group1}${line}\n"
+            g1_count=$((g1_count + 1))
+        else
+            # Check if any origin is NOT Ubuntu or linuxmint
+            local has_third_party=0
+            for origin in $origins; do
+                case "$origin" in
+                    Ubuntu|linuxmint) ;;
+                    *) has_third_party=1; break ;;
+                esac
+            done
+            
+            if [ "$has_third_party" -eq 1 ]; then
+                # Group 2: has third-party origin
+                group2="${group2}${line}\n"
+                g2_count=$((g2_count + 1))
+            else
+                # Group 3: only official origins
+                g3_count=$((g3_count + 1))
+            fi
+        fi
+    done
+    
+    # Output group 1
+    if [ "$g1_count" -gt 0 ]; then
+        sub "Packages with no known origin (external .deb or locally built)"
+        echo "$group1" | sed '/^$/d; s/^/  /'
+    fi
+    
+    # Output group 2
+    if [ "$g2_count" -gt 0 ]; then
+        sub "Packages from third-party origins"
+        if [ "$VERBOSE" -eq 1 ]; then
+            echo "$group2" | sed '/^$/d; s/^/  /'
+        else
+            echo "  ($g2_count packages — use -v to show)"
+        fi
+    fi
+    
+    # Output group 3 summary
+    if [ "$g3_count" -gt 0 ]; then
+        echo "  ($g3_count further packages differ only in version within official repos — hidden)"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -273,21 +364,23 @@ fi
 # ── 2 ──────────────────────────────────────────────────────────────
 if want 2; then sec 2
 if command -v apt-forktracer >/dev/null 2>&1; then
-    sub "apt-forktracer  (package / installed / available in repos)"
-    apt-forktracer 2>/dev/null | sed 's/^/  /' || none
+    apt-forktracer 2>/dev/null | filter_forktracer
 else
-    sub "Heuristic  (install apt-forktracer for a better answer)"
+    # Fallback heuristic with same three-way grouping
     apt list --installed 2>/dev/null | tail -n +2 | while IFS= read -r line; do
         p=${line%%/*}; v=$(echo "$line" | awk '{print $2}')
         o=$(apt-cache policy "$p" 2>/dev/null | awk -v v="$v" '
             $1==v {f=1; next}
             f && /https?:\/\// {print $2; exit}
             f && /\/var\/lib\/dpkg\/status/ {print "LOCAL-or-external-deb"; exit}')
-        case "$o" in
-            *ubuntu.com*|*linuxmint.com*|*debian.org*|"") ;;
-            *) printf '  %-40s %-24s %s\n' "$p" "$v" "$o" ;;
-        esac
-    done
+        if [ -z "$o" ]; then
+            printf '  %s (%s)\n' "$p" "$v"
+        elif echo "$o" | grep -qE 'ubuntu\.com|linuxmint\.com|debian\.org'; then
+            printf '  %s (%s) [%s: %s]\n' "$p" "$v" "$o" "$v"
+        else
+            printf '  %s (%s) [%s: %s]\n' "$p" "$v" "$o" "$v"
+        fi
+    done | filter_forktracer
 fi
 sub "Packages in an abnormal state"
 dpkg -l 2>/dev/null | awk 'NR>5 && $1!="ii" {print "  " $1 "  " $2}' || none
@@ -399,7 +492,10 @@ if want 8; then sec 8
 sub "Xorg configuration"
 for x in /etc/X11/xorg.conf /etc/X11/xorg.conf.d/* /usr/share/X11/xorg.conf.d/*; do
     [ -f "$x" ] || continue
-    if in_pkg "$x"; then
+    # Check if this is a gpu-manager generated file
+    if echo "$x" | grep -qE '/usr/share/X11/xorg.conf.d/1[01]-nvidia-(prime|offload)\.conf$'; then
+        st="generated (gpu-manager)"
+    elif in_pkg "$x"; then
         o=$(dpkg -S "$x" 2>/dev/null | cut -d: -f1); st="package: $o"
         dpkg --verify "$o" 2>/dev/null | grep -q "$x" && st="$st   ** MODIFIED **"
     else
