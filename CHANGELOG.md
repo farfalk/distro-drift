@@ -3,6 +3,19 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-08-01
+
+### Changed
+- Section 4: extended noise filter to hide `/usr/local/(lib|lib64|share|include|libexec)/`
+  and `/etc/libreoffice/registry/` — payload of locally compiled software. Added
+  a summary line showing the count of hidden files under `/usr/local`. Section 4
+  output **shrunk** from ~1255 to ~250-400 lines. Snapshots taken with 1.1.x
+  will show a large spurious diff for `/usr/local`.
+
+### Fixed
+- Section 2: group 1 packages now print one per line instead of being concatenated
+  on a single line. Section 2 line count in the summary increases by 5.
+
 ## [1.1.1] - 2026-08-01
 
 ### Fixed

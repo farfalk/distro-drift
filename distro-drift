@@ -28,7 +28,7 @@
 set -o pipefail
 export LC_ALL=C
 
-VERSION="1.1.1"
+VERSION="1.1.2"
 SNAPDIR="${DISTRO_DRIFT_SNAPDIR:-/var/lib/distro-drift}"
 SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
 SECTIONS="$SECTIONS_ALL"
@@ -283,13 +283,20 @@ cat > "$TMP/noise" <<'EOF'
 
 # SSH host keys
 ^/etc/ssh/ssh_host_
+
+# G1: Payload of locally compiled software installed via make install.
+# /usr/local/bin and /usr/local/sbin are deliberately NOT filtered:
+# that is where a human puts a script on purpose.
+^/usr/local/(lib|lib64|share|include|libexec)/
+^/etc/libreoffice/registry/
 EOF
 }
 
 # Filter apt-forktracer output into three groups per T1
 filter_forktracer() {
     local g1_count=0 g2_count=0 g3_count=0
-    local g1_output="" g2_output=""
+    local g2_lines=""
+    local printed_g1_header=0
     
     while IFS= read -r line; do
         [ -z "$line" ] && continue
@@ -301,9 +308,13 @@ filter_forktracer() {
         
         if [ -z "$origins" ]; then
             # Group 1: no origin at all
+            # G2: print each package on its own line
+            if [ "$printed_g1_header" -eq 0 ]; then
+                sub "Packages with no known origin (external .deb or locally built)"
+                printed_g1_header=1
+            fi
             g1_count=$((g1_count + 1))
-            # F2: accumulate with actual newlines using printf, not literal \n
-            g1_output="${g1_output}$(printf '  %s\n' "$line")"
+            echo "  $line"
         else
             # Check if any origin is NOT Ubuntu or linuxmint
             local has_third_party=0
@@ -317,7 +328,7 @@ filter_forktracer() {
             if [ "$has_third_party" -eq 1 ]; then
                 # Group 2: has third-party origin
                 g2_count=$((g2_count + 1))
-                g2_output="${g2_output}$(printf '  %s\n' "$line")"
+                g2_lines="${g2_lines}$(printf '  %s\n' "$line")"
             else
                 # Group 3: only official origins
                 g3_count=$((g3_count + 1))
@@ -325,18 +336,11 @@ filter_forktracer() {
         fi
     done
     
-    # Output group 1
-    if [ "$g1_count" -gt 0 ]; then
-        sub "Packages with no known origin (external .deb or locally built)"
-        # F2: printf expands the escaped newlines in the accumulated string
-        printf '%s' "$g1_output" | sed '/^$/d'
-    fi
-    
     # Output group 2
     if [ "$g2_count" -gt 0 ]; then
         sub "Packages from third-party origins"
         if [ "$VERBOSE" -eq 1 ]; then
-            printf '%s' "$g2_output" | sed '/^$/d'
+            printf '%s' "$g2_lines" | sed '/^$/d'
         else
             echo "  ($g2_count packages — use -v to show)"
         fi
@@ -442,8 +446,47 @@ echo
 echo "  Nothing here will be preserved or migrated by a release upgrade —"
 echo "  it is all hand-added, by you or by an installer script. Newest first."
 echo "  Contains false positives: read it, do not delete from it blindly."
-show() { sub "$1"; shift
-    unowned "$@" | while read -r x; do printf '  %5sd  %s\n' "$(age "$x")" "$x"; done | sort -n | tac
+show() {
+    local label="$1"; shift
+    local paths=("$@")
+    local hidden_count
+    local is_usrlocal=0
+    
+    # Check if this is /usr/local call (for G1 summary message)
+    for p in "${paths[@]}"; do
+        if [ "$p" = "/usr/local" ]; then
+            is_usrlocal=1
+            break
+        fi
+    done
+    
+    # Get all unowned files for these paths
+    find "${paths[@]}" -xdev -type f 2>/dev/null | norm | sort -u > "$TMP/show_disk"
+    comm -23 "$TMP/show_disk" "$TMP/pkgfiles" > "$TMP/show_all_unowned"
+    local unowned_count
+    unowned_count=$(wc -l < "$TMP/show_all_unowned")
+    
+    # Get filtered results and count hidden
+    local result
+    if [ "$VERBOSE" -eq 1 ]; then
+        # G1: with -v, skip noise filter entirely
+        cp "$TMP/show_all_unowned" "$TMP/show_result"
+        hidden_count=0
+    else
+        grep -vEf "$TMP/noise.clean" "$TMP/show_all_unowned" > "$TMP/show_result"
+        hidden_count=$((unowned_count - $(wc -l < "$TMP/show_result")))
+    fi
+    
+    sub "$label"
+    
+    if [ "$unowned_count" -gt 0 ]; then
+        cat "$TMP/show_result" | while read -r x; do printf '  %5sd  %s\n' "$(age "$x")" "$x"; done | sort -n | tac
+    fi
+    
+    # G1: print summary if lines were hidden (only for /usr/local per the plan)
+    if [ "$is_usrlocal" -eq 1 ] && [ "$hidden_count" -gt 0 ] && [ "$VERBOSE" -eq 0 ]; then
+        echo "  ($hidden_count further files hidden — locally built software; use -v to show)"
+    fi
 }
 show "/etc" /etc
 if [ "$QUICK" = 0 ]; then
