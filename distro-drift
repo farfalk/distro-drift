@@ -285,7 +285,7 @@ filter_forktracer() {
         
         # Extract all origin names from brackets like [OriginName: ...]
         local origins
-        origins=$(echo "$line" | grep -oE '\[[A-Za-z][A-Za-z- ]*:' | tr -d '[]:')
+        origins=$(echo "$line" | grep -oE '\[[A-Za-z][A-Za-z -]*:' | tr -d '[]:')
         
         if [ -z "$origins" ]; then
             # Group 1: no origin at all
