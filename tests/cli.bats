@@ -86,7 +86,7 @@ setup() {
 # nothing on the host.
 
 setup_fake_snapshots() {
-    export DISTRO_DRIFT_SNAPDIR="${BATS_TEST_TMPDIR}/snaps"
+    export DISTRO_DRIFT_SNAPDIR="${BATS_TMPDIR}/snaps"
     mkdir -p "$DISTRO_DRIFT_SNAPDIR"
     local i=0
     for d in 2026-06-01-1000 2026-07-01-1000 2026-07-15-1000 2026-08-01-0900; do
