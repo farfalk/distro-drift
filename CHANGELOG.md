@@ -3,6 +3,18 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-08-01
+
+### Fixed
+- Section 4, 5, 6: **1.1.0 reports are unreliable** — `unowned()` returned nothing due to
+  blank lines in the noise filter file causing `grep -vEf` to match everything. Anyone
+  who saved a snapshot with 1.1.0 must retake it.
+- Section 2: literal `\n` sequences appeared in group 1 output due to incorrect
+  string accumulation. Now uses `printf` to handle newlines correctly.
+- Section 2: origin detection regex now matches labels with dots and slashes
+  (e.g., `riot.im:`, `packagecloud.io/filips/FirefoxPWA:`). Previously these were
+  incorrectly classified as having no origin.
+
 ## [1.1.0] - 2026-08-01
 
 ### Added
