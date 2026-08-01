@@ -224,7 +224,7 @@ build_index() {
 in_pkg()  { grep -qxF "$(echo "$1" | norm)" "$TMP/pkgfiles"; }
 unowned() {
     find "$@" -xdev -type f 2>/dev/null | norm | sort -u > "$TMP/disk"
-    comm -23 "$TMP/disk" "$TMP/pkgfiles" | grep -vEf "$TMP/noise"
+    comm -23 "$TMP/disk" "$TMP/pkgfiles" | grep -vEf "$TMP/noise.clean"
 }
 
 # T3: Print section line count summary
@@ -288,20 +288,22 @@ EOF
 
 # Filter apt-forktracer output into three groups per T1
 filter_forktracer() {
-    local group1="" group2=""
     local g1_count=0 g2_count=0 g3_count=0
+    local g1_output="" g2_output=""
     
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         
         # Extract all origin names from brackets like [OriginName: ...]
+        # F3: use [^]:]+ to match any character except ] and : (dots, slashes, etc.)
         local origins
-        origins=$(echo "$line" | grep -oE '\[[A-Za-z][A-Za-z -]*:' | tr -d '[]:')
+        origins=$(echo "$line" | grep -oE '\[[^]:]+:' | tr -d '[]:')
         
         if [ -z "$origins" ]; then
             # Group 1: no origin at all
-            group1="${group1}${line}\n"
             g1_count=$((g1_count + 1))
+            # F2: accumulate with actual newlines using printf, not literal \n
+            g1_output="${g1_output}$(printf '  %s\n' "$line")"
         else
             # Check if any origin is NOT Ubuntu or linuxmint
             local has_third_party=0
@@ -314,8 +316,8 @@ filter_forktracer() {
             
             if [ "$has_third_party" -eq 1 ]; then
                 # Group 2: has third-party origin
-                group2="${group2}${line}\n"
                 g2_count=$((g2_count + 1))
+                g2_output="${g2_output}$(printf '  %s\n' "$line")"
             else
                 # Group 3: only official origins
                 g3_count=$((g3_count + 1))
@@ -326,14 +328,15 @@ filter_forktracer() {
     # Output group 1
     if [ "$g1_count" -gt 0 ]; then
         sub "Packages with no known origin (external .deb or locally built)"
-        echo "$group1" | sed '/^$/d; s/^/  /'
+        # F2: printf expands the escaped newlines in the accumulated string
+        printf '%s' "$g1_output" | sed '/^$/d'
     fi
     
     # Output group 2
     if [ "$g2_count" -gt 0 ]; then
         sub "Packages from third-party origins"
         if [ "$VERBOSE" -eq 1 ]; then
-            echo "$group2" | sed '/^$/d; s/^/  /'
+            printf '%s' "$g2_output" | sed '/^$/d'
         else
             echo "  ($g2_count packages — use -v to show)"
         fi
@@ -354,6 +357,9 @@ echo "host: $(hostname)   kernel: $(uname -r)   arch: $(dpkg --print-architectur
 [ -r /etc/linuxmint/info ] && grep -E "^(RELEASE|CODENAME|BASE_CODENAME)=" /etc/linuxmint/info | sed 's/^/  /'
 build_index
 write_noise_filter
+# F1: strip comments and blank lines from noise filter (grep -vEf treats
+# empty lines as matching everything, which would hide all unowned files)
+grep -vE '^[[:space:]]*(#|$)' "$TMP/noise" > "$TMP/noise.clean"
 echo "dpkg index: $(wc -l < "$TMP/pkgfiles") known paths   sections: $SECTIONS"
 
 # T3: buffer section output for line count summary

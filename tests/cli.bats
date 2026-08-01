@@ -151,3 +151,53 @@ setup_fake_snapshots() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"verbose"* ]]
 }
+
+# ── F1 regression test: noise filter cleaning ──────────────────────────────
+# grep -vEf treats blank lines as matching everything, which hides all unowned files.
+# This test verifies the cleaning step works.
+
+@test "noise filter cleaning removes comments and blank lines" {
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    
+    # Create a fake noise file with comments, blank lines, and one real pattern
+    printf '# Comment line\n\n/real/pattern\n\n# Another comment\n\n' > "$tmpdir/noise"
+    
+    # Run the cleaning command
+    run grep -vE '^[[:space:]]*(#|$)' "$tmpdir/noise"
+    [ "$status" -eq 0 ]
+    # Should have exactly one non-empty line
+    local count
+    count=$(echo "$output" | grep -c .)
+    [ "$count" -eq 1 ]
+    [[ "$output" == *"/real/pattern"* ]]
+    
+    rm -rf "$tmpdir"
+}
+
+# ── F3 regression test: origin detection with dots and slashes ────────────
+# The original regex [A-Za-z][A-Za-z -]* missed origins like riot.im: and
+# packagecloud.io/filips/FirefoxPWA:
+
+@test "origin regex matches dots and slashes" {
+    # Create a temp file with test lines
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    printf 'element-desktop (1.12.24) [riot.im: 1.12.24]\n' > "$tmpdir/test1"
+    printf 'firefoxpwa (2.18.4) [packagecloud.io/filips/FirefoxPWA: 2.18.4]\n' > "$tmpdir/test2"
+    printf 'zotero (9.0.6)\n' > "$tmpdir/test3"
+    
+    # Test with the corrected regex: extract origins
+    run grep -oE '\[[^]:]+:' "$tmpdir/test1"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[riot.im:"* ]]
+    
+    run grep -oE '\[[^]:]+:' "$tmpdir/test2"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[packagecloud.io/filips/FirefoxPWA:"* ]]
+    
+    run grep -oE '\[[^]:]+:' "$tmpdir/test3"
+    [ "$status" -eq 1 ]
+    
+    rm -rf "$tmpdir"
+}
