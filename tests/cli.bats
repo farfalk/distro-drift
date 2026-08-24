@@ -31,6 +31,7 @@ setup() {
     [[ "$output" == *"--sections"* ]]
     [[ "$output" == *"--save"* ]]
     [[ "$output" == *"--diff"* ]]
+    [[ "$output" == *"--verify"* ]]
 }
 
 @test "--list prints all nine sections" {
@@ -198,6 +199,27 @@ setup_fake_snapshots() {
     
     run grep -oE '\[[^]:]+:' "$tmpdir/test3"
     [ "$status" -eq 1 ]
-    
+
     rm -rf "$tmpdir"
+}
+
+# ── --verify tests ──────────────────────────────────────────────────────
+
+@test "--verify refuses to run without root" {
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "running as root"
+    fi
+    run "$DD" --verify
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"root"* ]]
+}
+
+@test "--verify with no snapshots fails cleanly" {
+    if [ "$(id -u)" -ne 0 ]; then
+        skip "needs root to reach the verify branch"
+    fi
+    export DISTRO_DRIFT_SNAPDIR="${BATS_TEST_TMPDIR}/empty"
+    mkdir -p "$DISTRO_DRIFT_SNAPDIR"
+    run "$DD" --verify
+    [ "$status" -eq 2 ]
 }

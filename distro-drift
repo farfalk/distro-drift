@@ -28,7 +28,7 @@
 set -o pipefail
 export LC_ALL=C
 
-VERSION="1.1.3"
+VERSION="1.2.0"
 SNAPDIR="${DISTRO_DRIFT_SNAPDIR:-/var/lib/distro-drift}"
 SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
 SECTIONS="$SECTIONS_ALL"
@@ -37,6 +37,7 @@ QUICK=0
 VERBOSE=0
 DIFF_A=""
 DIFF_B=""
+VERIFY_REF=""
 
 section_name() {
     case "$1" in
@@ -68,6 +69,9 @@ OPTIONS
       --diff [A] [B]        Compare snapshots. With no argument: latest vs now.
                             With one: A vs now. With two: A vs B.
       --snapshots           List stored snapshots with their references
+      --verify [REF]        Check a stored snapshot against the live system.
+                            Reports which custom modifications are still
+                            present and which are broken or missing.
 
 SNAPSHOT REFERENCES
   Accepted anywhere a snapshot is expected, git-style:
@@ -85,6 +89,7 @@ EXAMPLES
   sudo distro-drift --diff          what changed since the last snapshot
   sudo distro-drift --diff @3       what changed since the 4th-newest snapshot
   distro-drift --diff @5 @1         compare two stored snapshots (no root needed)
+  sudo distro-drift --verify        check the latest snapshot against live state
   sudo distro-drift -s 4 | less     only hand-added files
   sudo distro-drift -s 1,2 -q       sources and packages, fast
 
@@ -113,6 +118,10 @@ while [ $# -gt 0 ]; do
             SECTIONS=$(echo "$2" | tr ',' ' '); shift 2 ;;
         --save)        MODE="save"; shift ;;
         --snapshots)   MODE="snapshots"; shift ;;
+        --verify)
+            MODE="verify"
+            case "${2:-}" in -*|"") ;; *) VERIFY_REF="$2"; shift ;; esac
+            shift ;;
         --diff)
             MODE="diff"
             case "${2:-}" in -*|"") ;; *) DIFF_A="$2"; shift ;; esac
@@ -659,6 +668,212 @@ printf '\n\nDone — %s\n' "$(date -Is)"
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+# --verify: check a stored snapshot against the live system.
+#
+# Parses the snapshot for custom modifications and checks each one against
+# current state: custom systemd units (enabled? active?), ExecStart targets
+# (binary still exists?), custom config files and scripts (still present?),
+# third-party repos (still listed?).
+#
+# Exit status: 0 = all OK, 1 = some MISSING or BROKEN, 2 = error.
+verify_snapshot() {
+    local snap="$1"
+    local v_ok=0 v_broken=0 v_missing=0
+    local unit path state active binary line sub label
+
+    echo "distro-drift verify $VERSION — $(date -Is)"
+    echo "snapshot: $(basename "$snap" .txt)"
+    echo "system:   $(hostname)   kernel: $(uname -r)"
+    echo
+
+    # Extract a subsection from the snapshot by its --- label ---
+    vs_sub() {
+        awk -v lbl="--- $1 ---" '
+            index($0, lbl) == 1 { found=1; next }
+            found && /^--- / { exit }
+            found { print }
+        ' "$snap"
+    }
+
+    # --- Custom systemd units ---
+    echo "--- Custom systemd units ---"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        unit=${line#  }
+        unit=${unit%%  ->*}
+        path=${line##*  ->  }
+        [ "$unit" = "$line" ] && continue
+
+        if [ ! -f "$path" ]; then
+            printf '  %-8s %s\n' "MISSING" "$unit"
+            v_missing=$((v_missing + 1))
+        else
+            state=$(systemctl is-enabled "$unit" 2>/dev/null)
+            active=$(systemctl is-active "$unit" 2>/dev/null)
+            if [ "$state" = "not-found" ] || [ -z "$state" ]; then
+                printf '  %-8s %s  (no longer loaded)\n' "MISSING" "$unit"
+                v_missing=$((v_missing + 1))
+            elif [ "$active" = "failed" ]; then
+                printf '  %-8s %s  (%s, FAILED)\n' "BROKEN" "$unit" "$state"
+                v_broken=$((v_broken + 1))
+            elif [ "$state" = "enabled" ] && [ "$active" != "active" ]; then
+                printf '  %-8s %s  (%s, %s)\n' "BROKEN" "$unit" "$state" "$active"
+                v_broken=$((v_broken + 1))
+            else
+                printf '  %-8s %s  (%s, %s)\n' "OK" "$unit" "$state" "$active"
+                v_ok=$((v_ok + 1))
+            fi
+        fi
+    done < <(vs_sub "Enabled units not owned by any package")
+    echo
+
+    # --- Masked units ---
+    echo "--- Masked units ---"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        unit=$(echo "$line" | awk '{print $1}')
+        [ -z "$unit" ] && continue
+
+        state=$(systemctl is-enabled "$unit" 2>/dev/null)
+        if [ "$state" = "masked" ]; then
+            printf '  %-8s %s\n' "OK" "$unit"
+            v_ok=$((v_ok + 1))
+        elif [ "$state" = "not-found" ] || [ -z "$state" ]; then
+            printf '  %-8s %s  (no longer loaded)\n' "MISSING" "$unit"
+            v_missing=$((v_missing + 1))
+        else
+            printf '  %-8s %s  (unmasked, now %s)\n' "BROKEN" "$unit" "$state"
+            v_broken=$((v_broken + 1))
+        fi
+    done < <(vs_sub "Masked units")
+    echo
+
+    # --- Systemd drop-in files ---
+    echo "--- Systemd drop-in files ---"
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        if [ -f "$path" ]; then
+            printf '  %-8s %s\n' "OK" "$path"
+            v_ok=$((v_ok + 1))
+        else
+            printf '  %-8s %s\n' "MISSING" "$path"
+            v_missing=$((v_missing + 1))
+        fi
+    done < <(vs_sub "Overrides and drop-ins under /etc/systemd" | sed -n 's/^\[\(.*\)\]$/\1/p')
+    echo
+
+    # --- ExecStart dependencies ---
+    echo "--- ExecStart dependencies ---"
+    while IFS=$'\t' read -r path exec_cmd; do
+        [ -z "$path" ] && continue
+        [ -z "$exec_cmd" ] && continue
+        exec_cmd=${exec_cmd#-}
+        binary=$(echo "$exec_cmd" | awk '{print $1}')
+        [ -z "$binary" ] && continue
+
+        unit=$(basename "$path")
+        if [ -e "$binary" ]; then
+            printf '  %-8s %s  (%s)\n' "OK" "$binary" "$unit"
+            v_ok=$((v_ok + 1))
+        else
+            printf '  %-8s %s  (ExecStart of %s)\n' "MISSING" "$binary" "$unit"
+            v_missing=$((v_missing + 1))
+        fi
+    done < <(awk '
+        /^\[.*\]$/ {
+            if (path != "" && exec != "") print path "\t" exec
+            path = substr($0, 2, length($0)-2)
+            exec = ""
+            next
+        }
+        /ExecStart=/ {
+            line = $0
+            sub(/^ *ExecStart=/, "", line)
+            if (exec == "") exec = line
+        }
+        END {
+            if (path != "" && exec != "") print path "\t" exec
+        }
+    ' < <(vs_sub "Overrides and drop-ins under /etc/systemd"))
+    echo
+
+    # --- User systemd units ---
+    echo "--- User systemd units ---"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        path=${line#"${line%%[![:space:]]*}"}
+        case "$path" in
+            *:) continue ;;
+            /*) ;;
+            *) continue ;;
+        esac
+        if [ -f "$path" ]; then
+            printf '  %-8s %s\n' "OK" "$path"
+            v_ok=$((v_ok + 1))
+        else
+            printf '  %-8s %s\n' "MISSING" "$path"
+            v_missing=$((v_missing + 1))
+        fi
+    done < <(vs_sub "User units")
+    echo
+
+    # --- Custom config files ---
+    echo "--- Custom config files ---"
+    for sub in "Local modprobe.d entries" "Local udev rules" "Local sysctl settings"; do
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            path=$(echo "$line" | sed -n 's/^\[\(.*\)\]$/\1/p')
+            [ -z "$path" ] && continue
+            if [ -f "$path" ]; then
+                printf '  %-8s %s\n' "OK" "$path"
+                v_ok=$((v_ok + 1))
+            else
+                printf '  %-8s %s\n' "MISSING" "$path"
+                v_missing=$((v_missing + 1))
+            fi
+        done < <(vs_sub "$sub")
+    done
+    echo
+
+    # --- Custom files (section 4) ---
+    echo "--- Custom files ---"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        path=$(echo "$line" | sed -n 's/^  *[0-9][0-9]*d  \(.*\)$/\1/p')
+        [ -z "$path" ] && continue
+        if [ -f "$path" ]; then
+            printf '  %-8s %s\n' "OK" "$path"
+            v_ok=$((v_ok + 1))
+        else
+            printf '  %-8s %s\n' "MISSING" "$path"
+            v_missing=$((v_missing + 1))
+        fi
+    done < <(grep -E '^  +[0-9]+d  /' "$snap" 2>/dev/null)
+    echo
+
+    # --- Third-party repositories ---
+    echo "--- Third-party repositories ---"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        name=$(echo "$line" | sed -n 's/^\[\(.*\)\]  .*/\1/p')
+        [ -z "$name" ] && continue
+        if [ -f "/etc/apt/sources.list.d/$name" ]; then
+            printf '  %-8s %s\n' "OK" "$name"
+            v_ok=$((v_ok + 1))
+        else
+            printf '  %-8s %s\n' "MISSING" "$name"
+            v_missing=$((v_missing + 1))
+        fi
+    done < <(vs_sub "Additional repositories")
+    echo
+
+    printf 'Summary: %d OK, %d MISSING, %d BROKEN\n' "$v_ok" "$v_missing" "$v_broken"
+
+    [ "$v_missing" -gt 0 ] || [ "$v_broken" -gt 0 ] && return 1
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════════════
 case "$MODE" in
     report) run_report ;;
     save)
@@ -702,5 +917,20 @@ case "$MODE" in
         rc=$?
         [ "$rc" -eq 0 ] && echo "  (identical)"
         exit "$rc"
+        ;;
+    verify)
+        snap=$(resolve_ref "$VERIFY_REF") || exit 2
+        if [ -z "$snap" ] || [ "$snap" = "now" ]; then
+            echo "distro-drift: --verify needs a stored snapshot, not 'now'" >&2
+            echo "  see:  distro-drift --snapshots" >&2
+            exit 2
+        fi
+        if [ ! -r "$snap" ]; then
+            echo "distro-drift: cannot read snapshot: $snap" >&2
+            echo "  (snapshots are mode 0600 — try: sudo distro-drift --verify)" >&2
+            exit 2
+        fi
+        verify_snapshot "$snap"
+        exit $?
         ;;
 esac

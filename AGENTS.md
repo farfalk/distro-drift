@@ -75,6 +75,17 @@ resolution, exit codes. New CLI behaviour needs a test in `tests/cli.bats`.
 New report *content* does not — the CI `smoke` job runs the real thing on a
 throwaway Ubuntu runner.
 
+## --verify mode
+
+`--verify` parses a stored snapshot and checks each custom modification
+against the live system. It does **not** re-run any report sections — it
+reads the snapshot text and checks live state with `systemctl`, `test -f`,
+and `grep`. Parsing depends on the snapshot output format (subsection
+labels like `--- Enabled units not owned by any package ---`, the
+`unit  ->  path` pattern, the `[path]` block format, the `%5sd  %s` line
+format). If you change any of these output strings, update the parsers in
+`verify_snapshot()` too.
+
 ## Definition of done
 
 - [ ] `make check` passes

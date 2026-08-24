@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `--verify [REF]` mode: reads a stored snapshot and checks each custom
+  modification against the live system. Reports which custom systemd units
+  are still enabled/active, which ExecStart target binaries still exist,
+  which custom config files (modprobe, udev, sysctl, systemd drop-ins) are
+  still present, which custom scripts are still on disk, and which
+  third-party repositories are still listed. Exit status: 0 = all OK,
+  1 = some MISSING or BROKEN, 2 = error.
 - Progress indicator on stderr during `--save` and report generation. Shows
   `[N/total] Section name ...` as each section is scanned. Uses carriage
   return on terminals (single updating line), newline when redirected to a
