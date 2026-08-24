@@ -28,7 +28,7 @@
 set -o pipefail
 export LC_ALL=C
 
-VERSION="1.1.2"
+VERSION="1.1.3"
 SNAPDIR="${DISTRO_DRIFT_SNAPDIR:-/var/lib/distro-drift}"
 SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
 SECTIONS="$SECTIONS_ALL"
@@ -210,6 +210,35 @@ sub()  { printf '\n--- %s ---\n' "$*"; }
 none() { echo "  (none)"; }
 age()  { echo $(( ( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) ) / 86400 )); }
 
+# Progress indicator — writes to fd 4 (saved stderr) so it survives the
+# per-section exec > file 2>&1 redirects. Goes to stderr so it never
+# contaminates report output or snapshots.
+progress_init() {
+    PROGRESS_TOTAL=$(echo "$SECTIONS" | wc -w)
+    PROGRESS_CURRENT=0
+    exec 4>&2
+}
+
+progress_show() {
+    PROGRESS_CURRENT=$((PROGRESS_CURRENT + 1))
+    local msg
+    msg="distro-drift: [$PROGRESS_CURRENT/$PROGRESS_TOTAL] $(section_name "$1") ..."
+    if [ -t 4 ]; then
+        printf '\r%-72s' "$msg" >&4
+    else
+        printf '%s\n' "$msg" >&4
+    fi
+}
+
+progress_done() {
+    if [ -t 4 ]; then
+        printf '\r%-72s\n' "distro-drift: done." >&4
+    else
+        printf '%s\n' "distro-drift: done." >&4
+    fi
+    exec 4>&-
+}
+
 # usrmerge normalisation: dpkg records some paths as /bin/... and others as
 # /usr/bin/.... Without this we get hundreds of false positives.
 norm() { sed -E 's#^/bin/#/usr/bin/#; s#^/sbin/#/usr/sbin/#; s#^/lib/#/usr/lib/#'; }
@@ -354,11 +383,13 @@ filter_forktracer() {
 
 # ═══════════════════════════════════════════════════════════════════════
 run_report() {
+progress_init
 echo "distro-drift $VERSION — $(date -Is)"
 echo "host: $(hostname)   kernel: $(uname -r)   arch: $(dpkg --print-architecture 2>/dev/null)"
 # shellcheck disable=SC1091
 [ -r /etc/os-release ] && . /etc/os-release && echo "distro: ${PRETTY_NAME:-unknown}"
 [ -r /etc/linuxmint/info ] && grep -E "^(RELEASE|CODENAME|BASE_CODENAME)=" /etc/linuxmint/info | sed 's/^/  /'
+if [ -t 4 ]; then printf '\r%-72s' "distro-drift: building package index ..." >&4; fi
 build_index
 write_noise_filter
 # F1: strip comments and blank lines from noise filter (grep -vEf treats
@@ -374,7 +405,7 @@ exec 3>&1
 
 # ── 1 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.1" 2>&1
-if want 1; then sec 1
+if want 1; then progress_show 1; sec 1
 sub "Additional repositories"
 f=0; for x in /etc/apt/sources.list.d/*; do [ -f "$x" ] || continue; f=1
     printf '\n[%s]  last modified %s days ago\n' "$(basename "$x")" "$(age "$x")"
@@ -392,7 +423,7 @@ exec >&3 2>&1
 
 # ── 2 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.2" 2>&1
-if want 2; then sec 2
+if want 2; then progress_show 2; sec 2
 if command -v apt-forktracer >/dev/null 2>&1; then
     apt-forktracer 2>/dev/null | filter_forktracer
 else
@@ -423,7 +454,7 @@ exec >&3 2>&1
 
 # ── 3 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.3" 2>&1
-if want 3; then sec 3
+if want 3; then progress_show 3; sec 3
 sub "dpkg --verify   (trailing 'c' means config file — modification expected)"
 dpkg --verify 2>/dev/null | sed 's/^/  /' || none
 if command -v debsums >/dev/null 2>&1; then
@@ -441,7 +472,7 @@ exec >&3 2>&1
 
 # ── 4 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.4" 2>&1
-if want 4; then sec 4
+if want 4; then progress_show 4; sec 4
 echo
 echo "  Nothing here will be preserved or migrated by a release upgrade —"
 echo "  it is all hand-added, by you or by an installer script. Newest first."
@@ -509,7 +540,7 @@ exec >&3 2>&1
 
 # ── 5 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.5" 2>&1
-if want 5; then sec 5
+if want 5; then progress_show 5; sec 5
 sub "Active kernel command line"; sed 's/^/  /' /proc/cmdline
 sub "GRUB"; grep -vE '^\s*(#|$)' /etc/default/grub 2>/dev/null | sed 's/^/  /' || none
 sub "Installed kernels"; dpkg -l 'linux-image-*' 2>/dev/null | awk '$1=="ii"{print "  " $2 "  " $3}'
@@ -529,7 +560,7 @@ exec >&3 2>&1
 
 # ── 6 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.6" 2>&1
-if want 6; then sec 6
+if want 6; then progress_show 6; sec 6
 sub "Enabled units not owned by any package"
 systemctl list-unit-files --state=enabled --no-legend --no-pager 2>/dev/null \
 | awk '{print $1}' | while read -r u; do
@@ -551,7 +582,7 @@ exec >&3 2>&1
 
 # ── 7 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.7" 2>&1
-if want 7; then sec 7
+if want 7; then progress_show 7; sec 7
 sub "System cron"
 for x in $(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly) /etc/crontab; do
     [ -f "$x" ] || continue; printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
@@ -568,7 +599,7 @@ exec >&3 2>&1
 
 # ── 8 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.8" 2>&1
-if want 8; then sec 8
+if want 8; then progress_show 8; sec 8
 sub "Xorg configuration"
 for x in /etc/X11/xorg.conf /etc/X11/xorg.conf.d/* /usr/share/X11/xorg.conf.d/*; do
     [ -f "$x" ] || continue
@@ -595,7 +626,7 @@ exec >&3 2>&1
 
 # ── 9 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.9" 2>&1
-if want 9; then sec 9
+if want 9; then progress_show 9; sec 9
 sub "Flatpak"
 command -v flatpak >/dev/null 2>&1 && flatpak list --columns=application,origin 2>/dev/null | sed 's/^/  /' || echo "  (not installed)"
 sub "Snap"
@@ -612,6 +643,8 @@ sub "Manually selected alternatives"
 update-alternatives --get-selections 2>/dev/null | awk '$2=="manual"{print "  " $1 " -> " $3}' || none
 fi
 exec >&3 2>&1
+
+progress_done
 
 # T3: print section summary
 print_section_summary

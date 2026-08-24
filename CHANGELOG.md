@@ -5,6 +5,12 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Progress indicator on stderr during `--save` and report generation. Shows
+  `[N/total] Section name ...` as each section is scanned. Uses carriage
+  return on terminals (single updating line), newline when redirected to a
+  file. Does not affect report output (stdout) or snapshot contents.
+
 ### Changed
 - Replaced `AI_DISCLOSURE.md` (per-file SPDX headers from the ggfevans/ai-disclosure
   convention) with a contribution policy in `CONTRIBUTING.md`. Disclosure now
