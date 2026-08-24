@@ -147,4 +147,4 @@ runtime and skipped when absent.
 
 ---
 
-AI disclosure: see [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
+Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md).

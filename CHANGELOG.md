@@ -6,6 +6,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- Replaced `AI_DISCLOSURE.md` (per-file SPDX headers from the ggfevans/ai-disclosure
+  convention) with a contribution policy in `CONTRIBUTING.md`. Disclosure now
+  happens in pull request descriptions via `.github/PULL_REQUEST_TEMPLATE.md`,
+  not in source-file headers or commit messages.
 - `AGENTS.md`: removed non-existent `make status` from the commands list; added
   a "Do not modify" boundaries section.
 
