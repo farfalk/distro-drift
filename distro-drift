@@ -680,11 +680,31 @@ verify_snapshot() {
     local snap="$1"
     local v_ok=0 v_broken=0 v_missing=0
     local unit path state active binary line sub label
+    local seen="$TMP/verify_seen"
+    : > "$seen"
 
     echo "distro-drift verify $VERSION — $(date -Is)"
     echo "snapshot: $(basename "$snap" .txt)"
     echo "system:   $(hostname)   kernel: $(uname -r)"
     echo
+
+    # Check a path: print status, count, and record it to avoid duplicates.
+    vs_check() {
+        local status="$1" item="$2"
+        printf '  %-8s %s\n' "$status" "$item"
+        case "$status" in
+            OK)       v_ok=$((v_ok + 1)) ;;
+            MISSING)  v_missing=$((v_missing + 1)) ;;
+            BROKEN)   v_broken=$((v_broken + 1)) ;;
+        esac
+    }
+
+    # Returns 0 if path was already checked, 1 if new (and records it).
+    vs_dedup() {
+        grep -qxF "$1" "$seen" && return 0
+        printf '%s\n' "$1" >> "$seen"
+        return 1
+    }
 
     # Extract a subsection from the snapshot by its --- label ---
     vs_sub() {
@@ -703,10 +723,10 @@ verify_snapshot() {
         unit=${unit%%  ->*}
         path=${line##*  ->  }
         [ "$unit" = "$line" ] && continue
+        printf '%s\n' "$path" >> "$seen"
 
         if [ ! -f "$path" ]; then
-            printf '  %-8s %s\n' "MISSING" "$unit"
-            v_missing=$((v_missing + 1))
+            vs_check MISSING "$unit"
         else
             state=$(systemctl is-enabled "$unit" 2>/dev/null)
             active=$(systemctl is-active "$unit" 2>/dev/null)
@@ -736,8 +756,7 @@ verify_snapshot() {
 
         state=$(systemctl is-enabled "$unit" 2>/dev/null)
         if [ "$state" = "masked" ]; then
-            printf '  %-8s %s\n' "OK" "$unit"
-            v_ok=$((v_ok + 1))
+            vs_check OK "$unit"
         elif [ "$state" = "not-found" ] || [ -z "$state" ]; then
             printf '  %-8s %s  (no longer loaded)\n' "MISSING" "$unit"
             v_missing=$((v_missing + 1))
@@ -752,12 +771,11 @@ verify_snapshot() {
     echo "--- Systemd drop-in files ---"
     while IFS= read -r path; do
         [ -z "$path" ] && continue
+        vs_dedup "$path" && continue
         if [ -f "$path" ]; then
-            printf '  %-8s %s\n' "OK" "$path"
-            v_ok=$((v_ok + 1))
+            vs_check OK "$path"
         else
-            printf '  %-8s %s\n' "MISSING" "$path"
-            v_missing=$((v_missing + 1))
+            vs_check MISSING "$path"
         fi
     done < <(vs_sub "Overrides and drop-ins under /etc/systemd" | sed -n 's/^\[\(.*\)\]$/\1/p')
     echo
@@ -807,12 +825,11 @@ verify_snapshot() {
             /*) ;;
             *) continue ;;
         esac
+        vs_dedup "$path" && continue
         if [ -f "$path" ]; then
-            printf '  %-8s %s\n' "OK" "$path"
-            v_ok=$((v_ok + 1))
+            vs_check OK "$path"
         else
-            printf '  %-8s %s\n' "MISSING" "$path"
-            v_missing=$((v_missing + 1))
+            vs_check MISSING "$path"
         fi
     done < <(vs_sub "User units")
     echo
@@ -824,12 +841,11 @@ verify_snapshot() {
             [ -z "$line" ] && continue
             path=$(echo "$line" | sed -n 's/^\[\(.*\)\]$/\1/p')
             [ -z "$path" ] && continue
+            vs_dedup "$path" && continue
             if [ -f "$path" ]; then
-                printf '  %-8s %s\n' "OK" "$path"
-                v_ok=$((v_ok + 1))
+                vs_check OK "$path"
             else
-                printf '  %-8s %s\n' "MISSING" "$path"
-                v_missing=$((v_missing + 1))
+                vs_check MISSING "$path"
             fi
         done < <(vs_sub "$sub")
     done
@@ -841,12 +857,11 @@ verify_snapshot() {
         [ -z "$line" ] && continue
         path=$(echo "$line" | sed -n 's/^  *[0-9][0-9]*d  \(.*\)$/\1/p')
         [ -z "$path" ] && continue
+        vs_dedup "$path" && continue
         if [ -f "$path" ]; then
-            printf '  %-8s %s\n' "OK" "$path"
-            v_ok=$((v_ok + 1))
+            vs_check OK "$path"
         else
-            printf '  %-8s %s\n' "MISSING" "$path"
-            v_missing=$((v_missing + 1))
+            vs_check MISSING "$path"
         fi
     done < <(grep -E '^  +[0-9]+d  /' "$snap" 2>/dev/null)
     echo
