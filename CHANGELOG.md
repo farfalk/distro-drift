@@ -5,6 +5,10 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- `AGENTS.md`: removed non-existent `make status` from the commands list; added
+  a "Do not modify" boundaries section.
+
 ### Fixed
 - ShellCheck warnings in `distro-drift` (SC2034 unused variable, SC2002 useless
   cat) that broke `make check` and CI lint.

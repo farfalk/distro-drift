@@ -11,7 +11,6 @@ make lint                         # shellcheck only
 make test                         # bats only
 ./distro-drift --help             # dev copy
 sudo make install                 # -> /usr/local/bin/distro-drift
-make status                       # is the installed copy in sync with the repo?
 ```
 
 Run tests with `DISTRO_DRIFT_SNAPDIR` pointing at a temp dir. Tests must never
@@ -59,6 +58,14 @@ do not add ad-hoc `grep -v` inside individual sections.
 Optional tools (`debsums`, `cruft-ng`, `apt-forktracer`) must be probed with
 `command -v` and skipped with a one-line "not installed" hint. Never make them
 hard dependencies.
+
+## Do not modify
+
+- `tests/` are CLI-surface tests only. Do not add tests that require root or a
+  real dpkg database — the `smoke` CI job covers that.
+- The noise filter heredoc in `write_noise_filter` is the only place to add
+  section-4 exclusions. Never add `grep -v` inside individual sections.
+- Do not add new shellcheck disable directives without justification.
 
 ## Testing constraints
 
