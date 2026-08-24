@@ -644,8 +644,6 @@ update-alternatives --get-selections 2>/dev/null | awk '$2=="manual"{print "  " 
 fi
 exec >&3 2>&1
 
-progress_done
-
 # T3: print section summary
 print_section_summary
 
@@ -654,6 +652,8 @@ for s in $SECTIONS; do
     cat "$TMP/section.$s"
 done
 exec 3>&-
+
+progress_done
 
 printf '\n\nDone — %s\n' "$(date -Is)"
 }
