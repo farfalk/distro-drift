@@ -3,6 +3,12 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- ShellCheck warnings in `distro-drift` (SC2034 unused variable, SC2002 useless
+  cat) that broke `make check` and CI lint.
+
 ## [1.1.2] - 2026-08-01
 
 ### Changed

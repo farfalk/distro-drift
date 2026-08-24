@@ -467,7 +467,6 @@ show() {
     unowned_count=$(wc -l < "$TMP/show_all_unowned")
     
     # Get filtered results and count hidden
-    local result
     if [ "$VERBOSE" -eq 1 ]; then
         # G1: with -v, skip noise filter entirely
         cp "$TMP/show_all_unowned" "$TMP/show_result"
@@ -480,7 +479,7 @@ show() {
     sub "$label"
     
     if [ "$unowned_count" -gt 0 ]; then
-        cat "$TMP/show_result" | while read -r x; do printf '  %5sd  %s\n' "$(age "$x")" "$x"; done | sort -n | tac
+        while read -r x; do printf '  %5sd  %s\n' "$(age "$x")" "$x"; done < "$TMP/show_result" | sort -n | tac
     fi
     
     # G1: print summary if lines were hidden (only for /usr/local per the plan)
