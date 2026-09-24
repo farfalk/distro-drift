@@ -131,6 +131,16 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# ── validate requested sections ────────────────────────────────────────
+case "$SECTIONS" in *[![:space:]]*) ;; *)
+    echo "distro-drift: no sections requested" >&2; exit 2 ;; esac
+for s in $SECTIONS; do
+    case " $SECTIONS_ALL " in
+        *" $s "*) ;;
+        *) echo "distro-drift: unknown section '$s' — see: distro-drift --list" >&2; exit 2 ;;
+    esac
+done
+
 # ── snapshot references ────────────────────────────────────────────────
 # Snapshots listed newest first, so index 0 is the most recent.
 snapshot_list() { ls -1t "$SNAPDIR"/*.txt 2>/dev/null; }
@@ -558,14 +568,16 @@ sub "Active kernel command line"; sed 's/^/  /' /proc/cmdline
 sub "GRUB"; grep -vE '^\s*(#|$)' /etc/default/grub 2>/dev/null | sed 's/^/  /' || none
 sub "Installed kernels"; dpkg -l 'linux-image-*' 2>/dev/null | awk '$1=="ii"{print "  " $2 "  " $3}'
 sub "Local modprobe.d entries"
-for x in $(unowned /etc/modprobe.d /lib/modprobe.d); do
-    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+while IFS= read -r x; do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done < <(unowned /etc/modprobe.d /lib/modprobe.d)
 sub "Local sysctl settings"
-for x in $(unowned /etc/sysctl.d) /etc/sysctl.conf; do [ -f "$x" ] || continue
-    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+while IFS= read -r x; do [ -f "$x" ] || continue
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done < <(unowned /etc/sysctl.d; echo /etc/sysctl.conf)
 sub "Local udev rules"
-for x in $(unowned /etc/udev/rules.d); do
-    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+while IFS= read -r x; do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done < <(unowned /etc/udev/rules.d)
 sub "Local initramfs-tools files"; unowned /etc/initramfs-tools 2>/dev/null | sed 's/^/  /' || none
 sub "DKMS"; { command -v dkms >/dev/null 2>&1 && dkms status 2>/dev/null | sed 's/^/  /'; } || none
 fi
@@ -583,8 +595,9 @@ done
 sub "Masked units"
 systemctl list-unit-files --state=masked --no-legend --no-pager 2>/dev/null | sed 's/^/  /' || none
 sub "Overrides and drop-ins under /etc/systemd"
-for x in $(unowned /etc/systemd); do
-    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+while IFS= read -r x; do
+    printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done < <(unowned /etc/systemd)
 sub "User units"
 for h in /home/*; do [ -d "$h/.config/systemd/user" ] || continue
     echo "  $(basename "$h"):"; find "$h/.config/systemd/user" -type f 2>/dev/null | sed 's/^/    /'; done
@@ -597,8 +610,9 @@ exec >&3 2>&1
 exec > "$TMP/section.7" 2>&1
 if want 7; then progress_show 7; sec 7
 sub "System cron"
-for x in $(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly) /etc/crontab; do
-    [ -f "$x" ] || continue; printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'; done
+while IFS= read -r x; do
+    [ -f "$x" ] || continue; printf '\n[%s]\n' "$x"; grep -vE '^\s*(#|$)' "$x" | sed 's/^/    /'
+done < <(unowned /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly; echo /etc/crontab)
 sub "User crontabs"
 for h in /home/*; do u=$(basename "$h")
     c=$(crontab -u "$u" -l 2>/dev/null | grep -vE '^\s*(#|$)')
@@ -908,6 +922,11 @@ case "$MODE" in
     save)
         mkdir -p "$SNAPDIR" || { echo "distro-drift: cannot create $SNAPDIR" >&2; exit 1; }
         out="$SNAPDIR/$(date +%F-%H%M).txt"
+        if [ -e "$out" ]; then
+            echo "distro-drift: $out already exists — refusing to overwrite a snapshot from the same minute" >&2
+            echo "  wait a minute and re-run, or remove it first" >&2
+            exit 1
+        fi
         # Write to a temp file in $SNAPDIR, then rename — atomic on the same
         # filesystem. An interrupted --save leaves no partial snapshot behind
         # (the EXIT trap removes the temp); the chmod happens on the temp, so

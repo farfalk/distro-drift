@@ -5,6 +5,19 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- `-s`/`--sections` now rejects unknown section numbers (exit 2) instead of
+  silently producing an empty report. An empty list is also rejected.
+- `--save` refuses to overwrite a snapshot taken in the same minute (exit 1)
+  instead of silently replacing it.
+- CI pins `ludeeus/action-shellcheck` to the v2.0.0 commit SHA instead of the
+  mutable `@master` ref (supply-chain hygiene).
+
+### Fixed
+- Sections 5–7 iterate unowned paths with `while read` instead of `for x in
+  $(...)`: paths containing spaces no longer break the report (previously
+  each such path was split into garbage entries).
+
 ### Fixed
 - `--save` writes snapshots atomically: report goes to a temp file in the
   snapshot dir, `chmod 600` is applied there, then a rename installs it. An

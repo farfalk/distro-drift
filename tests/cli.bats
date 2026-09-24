@@ -53,6 +53,21 @@ setup() {
     [ "$status" -eq 2 ]
 }
 
+@test "--sections rejects unknown section numbers" {
+    run "$DD" -s 99
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unknown section '99'"* ]]
+    run "$DD" -s 1,99
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"'99'"* ]]
+}
+
+@test "--sections rejects an empty list" {
+    run "$DD" -s ,
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no sections requested"* ]]
+}
+
 @test "--snapshots does not require root" {
     run "$DD" --snapshots
     [ "$status" -eq 0 ]
