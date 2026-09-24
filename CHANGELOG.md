@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-09-24
 
 ### Added
 - `--verify [REF]` mode: reads a stored snapshot and checks each custom
