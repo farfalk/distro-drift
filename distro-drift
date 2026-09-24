@@ -913,6 +913,16 @@ case "$MODE" in
             exit 1
         fi
 
+        # Unreadable snapshots would diff as two empty streams and falsely
+        # report "identical" — fail with 2 (error) instead.
+        for f in "$a" "$b"; do
+            if [ "$f" != now ] && [ ! -r "$f" ]; then
+                echo "distro-drift: cannot read snapshot: $f" >&2
+                echo "  (snapshots are mode 0600 — try: sudo distro-drift --diff)" >&2
+                exit 2
+            fi
+        done
+
         materialise() {   # "now" -> generated report; otherwise the file itself
             if [ "$1" = now ]; then run_report > "$2"; printf '%s\n' "$2"
             else printf '%s\n' "$1"; fi

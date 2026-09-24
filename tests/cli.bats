@@ -147,6 +147,18 @@ setup_fake_snapshots() {
     [[ "$output" == *"identical"* ]]
 }
 
+@test "--diff on an unreadable snapshot exits 2, not falsely identical" {
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "root can read chmod 000 files"
+    fi
+    setup_fake_snapshots
+    chmod 000 "$DISTRO_DRIFT_SNAPDIR/2026-08-01-0900.txt"
+    run "$DD" --diff @3 @0
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot read snapshot"* ]]
+    [[ "$output" != *"identical"* ]]
+}
+
 @test "-v flag is accepted and does not error" {
     run "$DD" -v --help
     [ "$status" -eq 0 ]

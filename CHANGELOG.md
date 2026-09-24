@@ -27,6 +27,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   a "Do not modify" boundaries section.
 
 ### Fixed
+- `--diff` between two stored snapshots reported "(identical)" with exit 0
+  when the snapshot files were unreadable (e.g. run without root against
+  mode-0600 snapshots): both streams diffed as empty. Now exits 2 (error)
+  with a "cannot read snapshot" message, per the `diff(1)` convention.
 - ShellCheck warnings in `distro-drift` (SC2034 unused variable, SC2002 useless
   cat) that broke `make check` and CI lint.
 
