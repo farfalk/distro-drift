@@ -3,6 +3,29 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `--save` writes snapshots atomically: report goes to a temp file in the
+  snapshot dir, `chmod 600` is applied there, then a rename installs it. An
+  interrupted `--save` (Ctrl+C, full disk) no longer leaves a partial
+  header-only snapshot that looks like a valid one, and the file is never
+  briefly world-readable. Write failures now exit 1 with an error instead of
+  printing "Snapshot written".
+- `--diff` exits 2 (diff error) on unresolvable or missing snapshot
+  references, instead of 1 which means "differs" per `diff(1)`. Previously a
+  typo'd reference masqueraded as drift found.
+- `--verify` refuses snapshots without the `Done` footer (interrupted
+  `--save`) with exit 2, instead of reporting `0 OK` and a false pass.
+- `--verify`: ExecStart binaries are deduplicated against the custom-files
+  section (each script was printed and counted twice).
+- `--verify`: malformed lines without the `unit -> path` pattern are skipped
+  instead of producing a bogus MISSING entry.
+- Non-numeric `@N` references (`@5x`) are rejected cleanly instead of
+  emitting a bash arithmetic error.
+- Section 2 fallback: removed a dead branch (the elif and else arms were
+  identical). No behaviour change.
+
 ## [1.2.0] - 2026-09-24
 
 ### Added

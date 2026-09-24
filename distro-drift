@@ -28,7 +28,7 @@
 set -o pipefail
 export LC_ALL=C
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 SNAPDIR="${DISTRO_DRIFT_SNAPDIR:-/var/lib/distro-drift}"
 SECTIONS_ALL="1 2 3 4 5 6 7 8 9"
 SECTIONS="$SECTIONS_ALL"
@@ -153,6 +153,12 @@ resolve_ref() {
     case "$ref" in
         @[0-9]*)
             n=${ref#@}
+            case "$n" in
+                *[!0-9]*)
+                    echo "distro-drift: invalid snapshot reference '$ref'" >&2
+                    echo "  @N takes a number: @0, @1, @2 ..." >&2
+                    return 1 ;;
+            esac
             snapshot_list | sed -n "$((n + 1))p" | grep . || {
                 echo "distro-drift: no snapshot at $ref (only $(snapshot_list | wc -l) stored)" >&2
                 return 1
@@ -445,8 +451,6 @@ else
             f && /\/var\/lib\/dpkg\/status/ {print "LOCAL-or-external-deb"; exit}')
         if [ -z "$o" ]; then
             printf '  %s (%s)\n' "$p" "$v"
-        elif echo "$o" | grep -qE 'ubuntu\.com|linuxmint\.com|debian\.org'; then
-            printf '  %s (%s) [%s: %s]\n' "$p" "$v" "$o" "$v"
         else
             printf '  %s (%s) [%s: %s]\n' "$p" "$v" "$o" "$v"
         fi
@@ -683,6 +687,15 @@ verify_snapshot() {
     local seen="$TMP/verify_seen"
     : > "$seen"
 
+    # An interrupted --save leaves a header-only snapshot with no "Done"
+    # footer. Verifying it would report 0 OK / 0 MISSING and exit 0 —
+    # a false pass on the tool's own known failure mode. Refuse instead.
+    if ! grep -q '^Done — ' "$snap"; then
+        echo "distro-drift: snapshot appears incomplete (no Done footer)" >&2
+        echo "  likely an interrupted --save; take a new one: sudo distro-drift --save" >&2
+        return 2
+    fi
+
     echo "distro-drift verify $VERSION — $(date -Is)"
     echo "snapshot: $(basename "$snap" .txt)"
     echo "system:   $(hostname)   kernel: $(uname -r)"
@@ -719,10 +732,10 @@ verify_snapshot() {
     echo "--- Custom systemd units ---"
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        case "$line" in *"  ->  "*) ;; *) continue ;; esac
         unit=${line#  }
         unit=${unit%%  ->*}
         path=${line##*  ->  }
-        [ "$unit" = "$line" ] && continue
         printf '%s\n' "$path" >> "$seen"
 
         if [ ! -f "$path" ]; then
@@ -797,6 +810,7 @@ verify_snapshot() {
             printf '  %-8s %s  (ExecStart of %s)\n' "MISSING" "$binary" "$unit"
             v_missing=$((v_missing + 1))
         fi
+        printf '%s\n' "$binary" >> "$seen"
     done < <(awk '
         /^\[.*\]$/ {
             if (path != "" && exec != "") print path "\t" exec
@@ -892,25 +906,36 @@ verify_snapshot() {
 case "$MODE" in
     report) run_report ;;
     save)
-        mkdir -p "$SNAPDIR"
+        mkdir -p "$SNAPDIR" || { echo "distro-drift: cannot create $SNAPDIR" >&2; exit 1; }
         out="$SNAPDIR/$(date +%F-%H%M).txt"
-        run_report > "$out"
-        chmod 600 "$out"
-        echo "Snapshot written: $out"
-        echo "Compare later with:  sudo distro-drift --diff"
-        echo "List references:     distro-drift --snapshots"
-        echo "Keep a copy OFF this machine."
+        # Write to a temp file in $SNAPDIR, then rename — atomic on the same
+        # filesystem. An interrupted --save leaves no partial snapshot behind
+        # (the EXIT trap removes the temp); the chmod happens on the temp, so
+        # the final file is never world-readable even briefly.
+        tmp_snap="$SNAPDIR/.tmp.$$.txt"
+        trap 'rm -rf "$TMP" "$tmp_snap"' EXIT
+        if run_report > "$tmp_snap"; then
+            chmod 600 "$tmp_snap"
+            mv "$tmp_snap" "$out" || { echo "distro-drift: cannot install snapshot $out" >&2; exit 1; }
+            echo "Snapshot written: $out"
+            echo "Compare later with:  sudo distro-drift --diff"
+            echo "List references:     distro-drift --snapshots"
+            echo "Keep a copy OFF this machine."
+        else
+            echo "distro-drift: failed to write snapshot" >&2
+            exit 1
+        fi
         ;;
     diff)
         # With one operand (or none) the right-hand side is the current state.
         if [ -z "$DIFF_B" ]; then DIFF_B="now"; fi
 
-        a=$(resolve_ref "$DIFF_A") || exit 1
-        b=$(resolve_ref "$DIFF_B") || exit 1
+        a=$(resolve_ref "$DIFF_A") || exit 2
+        b=$(resolve_ref "$DIFF_B") || exit 2
 
         if [ -z "$a" ]; then
             echo "No snapshot to compare against. Run: sudo distro-drift --save" >&2
-            exit 1
+            exit 2
         fi
 
         # Unreadable snapshots would diff as two empty streams and falsely

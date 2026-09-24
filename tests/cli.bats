@@ -67,12 +67,12 @@ setup() {
     [[ "$output" == *"root"* ]]
 }
 
-@test "--diff without a snapshot fails cleanly rather than crashing" {
+@test "--diff with an unresolvable snapshot exits 2 (diff error)" {
     if [ "$(id -u)" -ne 0 ]; then
         skip "needs root to reach the diff branch"
     fi
     run "$DD" --diff /nonexistent-snapshot-file.txt
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
 }
 
 # ── snapshot reference resolution ──────────────────────────────────────
@@ -122,22 +122,29 @@ setup_fake_snapshots() {
 @test "an ambiguous prefix is rejected and lists the candidates" {
     setup_fake_snapshots
     run "$DD" --diff 2026-07 @0
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]           # 2 = error, not "differs" — diff(1) convention
     [[ "$output" == *"ambiguous"* ]]
 }
 
 @test "an out-of-range @N is rejected with the count" {
     setup_fake_snapshots
     run "$DD" --diff @99 @0
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]           # 2 = error, per diff(1)
     [[ "$output" == *"only 4 stored"* ]]
 }
 
 @test "an unknown name is rejected with a pointer to --snapshots" {
     setup_fake_snapshots
     run "$DD" --diff nosuchthing @0
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]           # 2 = error, per diff(1)
     [[ "$output" == *"--snapshots"* ]]
+}
+
+@test "a non-numeric @N is rejected cleanly" {
+    setup_fake_snapshots
+    run "$DD" --diff @5x @0
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"invalid snapshot reference"* ]]
 }
 
 @test "'latest' is an alias for @0" {
