@@ -19,6 +19,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   file. Does not affect report output (stdout) or snapshot contents.
 
 ### Changed
+- Section 4: intro text now says "Oldest first." to match the actual sort order
+  (`sort -n | tac` lists highest age first). Previously claimed "Newest first."
+  Diffing a snapshot from an older version against a newer one shows this as a
+  one-line change.
+- `--diff` now strips the `cruft report:` timestamp line from section 4 —
+  cruft-ng embeds the current time in its output, so the line changed on every
+  run and masked real drift.
 - Replaced `AI_DISCLOSURE.md` (per-file SPDX headers from the ggfevans/ai-disclosure
   convention) with a contribution policy in `CONTRIBUTING.md`. Disclosure now
   happens in pull request descriptions via `.github/PULL_REQUEST_TEMPLATE.md`,
