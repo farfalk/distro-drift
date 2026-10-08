@@ -600,7 +600,7 @@ while IFS= read -r x; do
 done < <(unowned /etc/systemd)
 sub "User units"
 for h in /home/*; do [ -d "$h/.config/systemd/user" ] || continue
-    echo "  $(basename "$h"):"; find "$h/.config/systemd/user" -type f 2>/dev/null | sed 's/^/    /'; done
+    echo "  $(basename "$h"):"; find "$h/.config/systemd/user" \( -type f -o -type l \) 2>/dev/null | sed 's/^/    /'; done
 sub "Currently failed units"
 systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/  /' || none
 fi

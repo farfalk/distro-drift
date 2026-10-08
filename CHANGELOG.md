@@ -34,6 +34,11 @@ This project follows [Semantic Versioning](https://semver.org/).
   section (each script was printed and counted twice).
 - `--verify`: malformed lines without the `unit -> path` pattern are skipped
   instead of producing a bogus MISSING entry.
+- Section 6 "User units" now inventories symlinks, not just regular files. The
+  `*.target.wants/` and `*.service.wants/` links are a user unit's enabled
+  state — previously enabling or disabling a user unit produced no drift.
+  `--verify` checks these paths too: a disabled unit (symlink removed) or a
+  broken link is now reported MISSING instead of silently passing.
 - Non-numeric `@N` references (`@5x`) are rejected cleanly instead of
   emitting a bash arithmetic error.
 - Section 2 fallback: removed a dead branch (the elif and else arms were
