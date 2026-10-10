@@ -60,6 +60,8 @@ sudo distro-drift --diff          # what changed since the last snapshot
 sudo distro-drift -s 4            # only hand-added files
 sudo distro-drift -s 1,2 --quick  # sources and packages, fast
 distro-drift --snapshots          # list stored snapshots and their refs
+distro-drift --snapshots --json   # same, machine-readable (scripts, agents)
+distro-drift --diff @1 @0 --json  # diff two stored snapshots, machine-readable
 distro-drift --help
 ```
 
@@ -102,6 +104,24 @@ on error. That makes it usable in scripts and CI.
 
 Comparing two stored snapshots generates nothing, so it does not require root.
 
+### JSON output
+
+`--json` makes `--snapshots` and `--diff` emit machine-readable JSON on stdout,
+for scripts and agents. On any error the output is a single error object and
+the exit code is non-zero:
+
+```json
+{"schema":1,"tool":"distro-drift","version":"1.3.0","error":"...","hint":"..."}
+```
+
+`--snapshots --json` prints a `snapshots` array (`ref`, `name`, `size_bytes`,
+`age_days`, `path`; an empty array when there are none). `--diff A B --json`
+prints `a`, `b`, `identical` and the diff as a `diff` array of lines; the exit
+status still follows `diff(1)`. The JSON schema is a versioned API: the
+`schema` field is bumped on breaking changes (recorded in the CHANGELOG).
+
+The other modes ignore `--json` and keep their text output.
+
 ## Sections
 
 | # | Section | What it answers |
@@ -122,9 +142,12 @@ it to `/etc/X11/xorg.conf.d/`, which takes precedence.
 
 ## Snapshots
 
-Stored in `/var/lib/distro-drift/YYYY-MM-DD-HHMM.txt`, mode 0600. They can
-contain hostnames, usernames, package inventories and repository URLs — treat
-them as system documentation, and keep copies off the machine they describe.
+Stored in `/var/lib/distro-drift/YYYY-MM-DD-HHMM.txt`, mode 0640, group-owned
+by the user who ran `sudo distro-drift --save` — so that user can read snapshots
+and diff them without sudo. Snapshots written by versions older than 1.3.0 are
+mode 0600 (root only). They can contain hostnames, usernames, package
+inventories and repository URLs — treat them as system documentation, and
+keep copies off the machine they describe.
 
 ## Development
 

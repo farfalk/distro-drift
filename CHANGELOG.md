@@ -5,7 +5,31 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `--json` flag: machine-readable JSON output for `--snapshots` and `--diff` —
+  the two commands that run without root, meant for scripts and agents.
+  `--snapshots --json` prints a `snapshots` array (`ref`, `name`,
+  `size_bytes`, `age_days`, `path`); `--diff A B --json` prints `a`, `b`,
+  `identical` and the diff as a `diff` array of lines (exit status still
+  follows `diff(1)`). Every non-zero exit emits a JSON error object on
+  stdout. Other modes ignore `--json` and keep their text output. The JSON
+  schema is a versioned API: breaking changes bump the `schema` field and
+  need a semver minor.
+- `skills/distro-drift/SKILL.md`: agent skill with the diagnostic workflow, a
+  two-branch playbook for `--verify` MISSING/BROKEN findings (package vs
+  user-authored items), and a "system customisation report" flow that helps
+  the user document their customisations as diffs from stock behavior and
+  share them with other users of the distribution.
+
 ### Changed
+- Snapshots are now written mode `0640 root:<group of the invoking sudo
+  user>` instead of `0600 root:root`, so the user who ran
+  `sudo distro-drift --save` can read snapshots and diff two stored ones
+  without sudo. Snapshots written by older versions stay `0600` until
+  re-saved.
+- `--save` success output now shows both diff forms: `sudo distro-drift
+  --diff` (latest snapshot vs now) and `distro-drift --diff @1 @0` (two
+  stored snapshots, no root).
 - `-s`/`--sections` now rejects unknown section numbers (exit 2) instead of
   silently producing an empty report. An empty list is also rejected.
 - `--save` refuses to overwrite a snapshot taken in the same minute (exit 1)

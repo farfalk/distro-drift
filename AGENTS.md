@@ -40,6 +40,12 @@ M. `-s 8` alone must produce valid output.
 **`--diff` exit status follows `diff(1)`**: 0 identical, 1 differs, 2 error.
 Do not "improve" this to always-0.
 
+**The JSON schema is also a long-lived data format.** `--json` (supported on
+`--snapshots` and `--diff` only) is versioned via the `schema` field; breaking
+changes need a CHANGELOG entry and a semver minor bump. Rule: no code path
+exits non-zero with non-JSON stdout while `--json` is set — every error path
+goes through `die`/`ref_die`.
+
 ## Non-obvious implementation details
 
 `build_index` reads `/var/lib/dpkg/info/*.list` **once** into `$TMP/pkgfiles`.
@@ -58,6 +64,13 @@ do not add ad-hoc `grep -v` inside individual sections.
 Optional tools (`debsums`, `cruft-ng`, `apt-forktracer`) must be probed with
 `command -v` and skipped with a one-line "not installed" hint. Never make them
 hard dependencies.
+
+Snapshots are written `0640 root:<group of the invoking sudo user>`, not
+`0600`, so the user who ran `sudo distro-drift --save` can read and diff them
+without sudo (their agents/tools run as them). The content is paths and names,
+not secrets. The `chmod`+`chgrp` happen on the temp file before the atomic
+rename — the final file is never world-readable even briefly. Existing
+snapshots stay `0600` until re-saved.
 
 ## Do not modify
 
