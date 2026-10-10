@@ -39,6 +39,23 @@ jobs:
         run: |
           test "$(wc -l < report.txt)" -gt 40
           grep -q "Third-party software sources" report.txt
+      - name: Save a snapshot (written mode 0640 since 1.3.0)
+        run: sudo ./distro-drift --save > /dev/null
+      - name: New snapshots are group-readable, not world-readable
+        run: |
+          f=$(ls -t /var/lib/distro-drift/*.txt | head -1)
+          [ "$(stat -c %a "$f")" = "640" ]
+      - name: --snapshots --json is valid JSON (no root needed)
+        run: |
+          python3 --version
+          ./distro-drift --snapshots --json > snaps.json
+          python3 -m json.tool < snaps.json > /dev/null
+          grep -q '"ref":"@0"' snaps.json
+      - name: --diff --json is valid JSON (no root needed)
+        run: |
+          ./distro-drift --diff @0 @0 --json > diff.json
+          python3 -m json.tool < diff.json > /dev/null
+          grep -q '"identical":true' diff.json
       - uses: actions/upload-artifact@v4
         with:
           name: sample-report

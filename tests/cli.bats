@@ -32,6 +32,7 @@ setup() {
     [[ "$output" == *"--save"* ]]
     [[ "$output" == *"--diff"* ]]
     [[ "$output" == *"--verify"* ]]
+    [[ "$output" == *"--json"* ]]
 }
 
 @test "--list prints all nine sections" {
@@ -256,4 +257,73 @@ setup_fake_snapshots() {
     mkdir -p "$DISTRO_DRIFT_SNAPDIR"
     run "$DD" --verify
     [ "$status" -eq 2 ]
+}
+
+# ── --json tests ────────────────────────────────────────────────────────
+# JSON output is validated with python3 -m json.tool (no jq dependency).
+# Every test skips cleanly when python3 is absent.
+
+@test "--snapshots --json emits valid JSON listing the snapshots" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    setup_fake_snapshots
+    run "$DD" --snapshots --json
+    [ "$status" -eq 0 ]
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"snapshots":['* ]]
+    [[ "$output" == *'"ref":"@0"'* ]]
+    [[ "$output" == *'"name":"2026-08-01-0900"'* ]]
+    [[ "$output" == *'"size_bytes":'* ]]
+    [[ "$output" == *'"age_days":'* ]]
+}
+
+@test "--snapshots --json emits an empty array when no snapshots exist" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    export DISTRO_DRIFT_SNAPDIR="${BATS_TEST_TMPDIR}/empty-json"
+    mkdir -p "$DISTRO_DRIFT_SNAPDIR"
+    run "$DD" --snapshots --json
+    [ "$status" -eq 0 ]
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"snapshots":[]'* ]]
+}
+
+@test "--diff --json marks identical snapshots and exits 0" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    setup_fake_snapshots
+    run "$DD" --diff @0 @0 --json
+    [ "$status" -eq 0 ]
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"identical":true'* ]]
+    [[ "$output" == *'"diff":[]'* ]]
+}
+
+@test "--diff --json reports differences as a line array and exits 1" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    setup_fake_snapshots
+    run "$DD" --diff @3 @0 --json
+    [ "$status" -eq 1 ]           # 1 = differs, as diff(1)
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"identical":false'* ]]
+    [[ "$output" == *'MARK-'* ]]
+}
+
+@test "--diff --json with an unresolvable ref emits a JSON error object and exits 2" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    setup_fake_snapshots
+    run "$DD" --diff @99 @0 --json
+    [ "$status" -eq 2 ]           # 2 = error, per diff(1)
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"error":'* ]]
+    [[ "$output" == *'"schema":1'* ]]
+}
+
+@test "--json turns the root refusal into a JSON error object and exits 1" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "running as root"
+    fi
+    run "$DD" --save --json
+    [ "$status" -eq 1 ]
+    echo "$output" | python3 -m json.tool > /dev/null
+    [[ "$output" == *'"error":'* ]]
+    [[ "$output" == *'root'* ]]
 }

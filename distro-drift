@@ -38,6 +38,63 @@ VERBOSE=0
 DIFF_A=""
 DIFF_B=""
 VERIFY_REF=""
+JSON=0
+
+# ── JSON helpers (--json; see --help) ──────────────────────────────────
+# jesc STRING -> JSON-escaped string, no surrounding quotes. Escapes
+# backslash, double quote and C0 control chars. Non-ASCII bytes pass through
+# raw: valid JSON for valid UTF-8, and byte-wise \uXXXX under LC_ALL=C would
+# mangle UTF-8. Fast path (nothing to escape) is one case, no subprocess.
+jesc() {
+    local s="$1" out="" i n c
+    case "$s" in
+        *\\*|*'"'*|*[![:print:]]*) ;;   # needs escaping -> slow path
+        *) printf '%s' "$s"; return ;;
+    esac
+    for ((i=0; i<${#s}; i++)); do
+        c="${s:$i:1}"
+        printf -v n '%d' "'$c"
+        if   [ "$n" -eq 92 ]; then out+="\\\\"
+        elif [ "$n" -eq 34 ]; then out+='\"'
+        elif [ "$n" -lt 32 ]; then printf -v c '\\u%04x' "$n"; out+="$c"
+        else out+="$c"
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# json_error MESSAGE [HINT] -> one JSON error object on stdout.
+json_error() {
+    printf '{"schema":1,"tool":"distro-drift","version":"%s","error":"%s","hint":"%s"}\n' \
+        "$VERSION" "$(jesc "$1")" "$(jesc "${2:-}")"
+}
+
+# die CODE MESSAGE [HINT] — exit CODE. Under --json the error is a JSON
+# object on stdout, so stdout stays machine-readable on every non-zero
+# exit; otherwise the usual "distro-drift: MESSAGE" + indented hint on
+# stderr.
+die() {
+    if [ "$JSON" = 1 ]; then
+        json_error "$2" "${3:-}"
+    else
+        echo "distro-drift: $2" >&2
+        if [ -n "${3:-}" ]; then echo "  $3" >&2; fi
+    fi
+    exit "$1"
+}
+
+# ref_die CODE ERRFILE — resolve_ref writes its diagnostics to stderr.
+# Re-emit a captured stderr file verbatim (text mode), or turn its first
+# two lines into a JSON error object (--json).
+ref_die() {
+    if [ "$JSON" = 1 ]; then
+        die "$1" "$(sed -n 1p "$2" | sed 's/^distro-drift: //')" \
+                 "$(sed -n 2p "$2" | sed 's/^  //')"
+    else
+        cat "$2" >&2
+        exit "$1"
+    fi
+}
 
 section_name() {
     case "$1" in
@@ -72,6 +129,8 @@ OPTIONS
       --verify [REF]        Check a stored snapshot against the live system.
                             Reports which custom modifications are still
                             present and which are broken or missing.
+      --json                Machine-readable JSON output (with --snapshots,
+                            --diff). Errors become JSON objects on stdout.
 
 SNAPSHOT REFERENCES
   Accepted anywhere a snapshot is expected, git-style:
@@ -104,6 +163,10 @@ EOF
 }
 
 # ── argument parsing ───────────────────────────────────────────────────
+# --json is detected up front so that even argument-parsing errors honour
+# it (no code path exits non-zero with non-JSON stdout while --json is set).
+for a in "$@"; do [ "$a" = "--json" ] && JSON=1; done
+
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)     usage; exit 0 ;;
@@ -113,8 +176,9 @@ while [ $# -gt 0 ]; do
             exit 0 ;;
         -q|--quick)    QUICK=1; shift ;;
         -v|--verbose)  VERBOSE=1; shift ;;
+        --json)        JSON=1; shift ;;
         -s|--sections)
-            [ -n "${2:-}" ] || { echo "--sections requires an argument" >&2; exit 2; }
+            [ -n "${2:-}" ] || die 2 "--sections requires an argument"
             SECTIONS=$(echo "$2" | tr ',' ' '); shift 2 ;;
         --save)        MODE="save"; shift ;;
         --snapshots)   MODE="snapshots"; shift ;;
@@ -127,17 +191,17 @@ while [ $# -gt 0 ]; do
             case "${2:-}" in -*|"") ;; *) DIFF_A="$2"; shift ;; esac
             case "${2:-}" in -*|"") ;; *) DIFF_B="$2"; shift ;; esac
             shift ;;
-        *) echo "Unknown option: $1" >&2; echo "Try: distro-drift --help" >&2; exit 2 ;;
+        *) die 2 "Unknown option: $1" "Try: distro-drift --help" ;;
     esac
 done
 
 # ── validate requested sections ────────────────────────────────────────
 case "$SECTIONS" in *[![:space:]]*) ;; *)
-    echo "distro-drift: no sections requested" >&2; exit 2 ;; esac
+    die 2 "no sections requested" ;; esac
 for s in $SECTIONS; do
     case " $SECTIONS_ALL " in
         *" $s "*) ;;
-        *) echo "distro-drift: unknown section '$s' — see: distro-drift --list" >&2; exit 2 ;;
+        *) die 2 "unknown section '$s' — see: distro-drift --list" ;;
     esac
 done
 
@@ -197,6 +261,24 @@ resolve_ref() {
 }
 
 if [ "$MODE" = snapshots ]; then
+    if [ "$JSON" = 1 ]; then
+        printf '{"schema":1,"tool":"distro-drift","version":"%s","generated":"%s","snapshots":[' \
+            "$VERSION" "$(date -Is)"
+        i=0; first=1
+        while read -r f; do
+            [ "$first" -eq 1 ] || printf ','
+            first=0
+            printf '{"ref":"@%s","name":"%s","size_bytes":%s,"age_days":%s,"path":"%s"}' \
+                "$i" \
+                "$(jesc "$(basename "$f" .txt)")" \
+                "$(stat -c %s "$f" 2>/dev/null || echo 0)" \
+                "$(( ( $(date +%s) - $(stat -c %Y "$f" 2>/dev/null || echo 0) ) / 86400 ))" \
+                "$(jesc "$f")"
+            i=$((i + 1))
+        done < <(snapshot_list)
+        printf ']}\n'
+        exit 0
+    fi
     if [ -d "$SNAPDIR" ] && snapshot_list | grep -q .; then
         printf '  %-6s %-22s %8s  %s\n' REF NAME SIZE AGE
         i=0
@@ -221,9 +303,8 @@ if [ "$MODE" = diff ] && [ -n "$DIFF_B" ] && [ "$DIFF_A" != now ] && [ "$DIFF_B"
     NEEDS_ROOT=0
 fi
 if [ "$NEEDS_ROOT" = 1 ] && [ "$(id -u)" -ne 0 ]; then
-    echo "distro-drift must run as root: sudo distro-drift" >&2
-    echo "  (comparing two stored snapshots does not need root)" >&2
-    exit 1
+    die 1 "must run as root: sudo distro-drift" \
+        "(comparing two stored snapshots does not need root)"
 fi
 
 TMP=$(mktemp -d) || exit 1
@@ -239,12 +320,14 @@ age()  { echo $(( ( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) ) / 8
 # per-section exec > file 2>&1 redirects. Goes to stderr so it never
 # contaminates report output or snapshots.
 progress_init() {
+    [ "$JSON" = 1 ] && return 0
     PROGRESS_TOTAL=$(echo "$SECTIONS" | wc -w)
     PROGRESS_CURRENT=0
     exec 4>&2
 }
 
 progress_show() {
+    [ "$JSON" = 1 ] && return 0
     PROGRESS_CURRENT=$((PROGRESS_CURRENT + 1))
     local msg
     msg="distro-drift: [$PROGRESS_CURRENT/$PROGRESS_TOTAL] $(section_name "$1") ..."
@@ -256,6 +339,7 @@ progress_show() {
 }
 
 progress_done() {
+    [ "$JSON" = 1 ] && return 0
     if [ -t 4 ]; then
         printf '\r%-72s\n' "distro-drift: done." >&4
     else
@@ -705,9 +789,8 @@ verify_snapshot() {
     # footer. Verifying it would report 0 OK / 0 MISSING and exit 0 —
     # a false pass on the tool's own known failure mode. Refuse instead.
     if ! grep -q '^Done — ' "$snap"; then
-        echo "distro-drift: snapshot appears incomplete (no Done footer)" >&2
-        echo "  likely an interrupted --save; take a new one: sudo distro-drift --save" >&2
-        return 2
+        die 2 "snapshot appears incomplete (no Done footer)" \
+            "likely an interrupted --save; take a new one: sudo distro-drift --save"
     fi
 
     echo "distro-drift verify $VERSION — $(date -Is)"
@@ -920,50 +1003,53 @@ verify_snapshot() {
 case "$MODE" in
     report) run_report ;;
     save)
-        mkdir -p "$SNAPDIR" || { echo "distro-drift: cannot create $SNAPDIR" >&2; exit 1; }
+        mkdir -p "$SNAPDIR" || die 1 "cannot create $SNAPDIR"
         out="$SNAPDIR/$(date +%F-%H%M).txt"
         if [ -e "$out" ]; then
-            echo "distro-drift: $out already exists — refusing to overwrite a snapshot from the same minute" >&2
-            echo "  wait a minute and re-run, or remove it first" >&2
-            exit 1
+            die 1 "$out already exists — refusing to overwrite a snapshot from the same minute" \
+                "wait a minute and re-run, or remove it first"
         fi
         # Write to a temp file in $SNAPDIR, then rename — atomic on the same
         # filesystem. An interrupted --save leaves no partial snapshot behind
         # (the EXIT trap removes the temp); the chmod happens on the temp, so
-        # the final file is never world-readable even briefly.
+        # the final file is never world-readable even briefly. Mode 0640 with
+        # the invoking user's group lets that user (and tools running as them)
+        # read snapshots without sudo. The content is paths and names, not
+        # secrets; the invoking user is the admin who typed their sudo password.
         tmp_snap="$SNAPDIR/.tmp.$$.txt"
         trap 'rm -rf "$TMP" "$tmp_snap"' EXIT
         if run_report > "$tmp_snap"; then
-            chmod 600 "$tmp_snap"
-            mv "$tmp_snap" "$out" || { echo "distro-drift: cannot install snapshot $out" >&2; exit 1; }
+            chmod 0640 "$tmp_snap"
+            if [ -n "${SUDO_USER:-}" ]; then
+                chgrp "$(id -gn "$SUDO_USER")" "$tmp_snap"
+            fi
+            mv "$tmp_snap" "$out" || die 1 "cannot install snapshot $out"
             echo "Snapshot written: $out"
-            echo "Compare later with:  sudo distro-drift --diff"
+            echo "Compare later with:  sudo distro-drift --diff     (latest snapshot vs now)"
+            echo "                     distro-drift --diff @1 @0       (two stored snapshots — no root)"
             echo "List references:     distro-drift --snapshots"
             echo "Keep a copy OFF this machine."
         else
-            echo "distro-drift: failed to write snapshot" >&2
-            exit 1
+            die 1 "failed to write snapshot"
         fi
         ;;
     diff)
         # With one operand (or none) the right-hand side is the current state.
         if [ -z "$DIFF_B" ]; then DIFF_B="now"; fi
 
-        a=$(resolve_ref "$DIFF_A") || exit 2
-        b=$(resolve_ref "$DIFF_B") || exit 2
+        a=$(resolve_ref "$DIFF_A" 2>"$TMP/e") || ref_die 2 "$TMP/e"
+        b=$(resolve_ref "$DIFF_B" 2>"$TMP/e") || ref_die 2 "$TMP/e"
 
         if [ -z "$a" ]; then
-            echo "No snapshot to compare against. Run: sudo distro-drift --save" >&2
-            exit 2
+            die 2 "no snapshot to compare against" "run: sudo distro-drift --save"
         fi
 
         # Unreadable snapshots would diff as two empty streams and falsely
         # report "identical" — fail with 2 (error) instead.
         for f in "$a" "$b"; do
             if [ "$f" != now ] && [ ! -r "$f" ]; then
-                echo "distro-drift: cannot read snapshot: $f" >&2
-                echo "  (snapshots are mode 0600 — try: sudo distro-drift --diff)" >&2
-                exit 2
+                die 2 "cannot read snapshot: $f" \
+                    "snapshots are mode 0640 (older ones 0600) — try: sudo distro-drift --diff"
             fi
         done
 
@@ -975,29 +1061,46 @@ case "$MODE" in
         fb=$(materialise "$b" "$TMP/b.txt")
 
         label() { if [ "$1" = now ]; then echo "current system state"; else basename "$1"; fi; }
+        # JSON labels are machine-friendly: the file name, or "now".
+        jlabel() { if [ "$1" = now ]; then echo now; else basename "$1"; fi; }
+
+        # drop header lines that change on every run and would mask real drift
+        strip() { grep -vE '^(distro-drift [0-9]|Done —|dpkg index|host: | *cruft report:)'; }
+        diff <(strip < "$fa") <(strip < "$fb") > "$TMP/diff.out"
+        rc=$?
+
+        if [ "$JSON" = 1 ]; then
+            if [ "$rc" -eq 0 ]; then ident=true; else ident=false; fi
+            printf '{"schema":1,"tool":"distro-drift","version":"%s","generated":"%s","a":"%s","b":"%s","identical":%s,"diff":[' \
+                "$VERSION" "$(date -Is)" \
+                "$(jesc "$(jlabel "$a")")" "$(jesc "$(jlabel "$b")")" "$ident"
+            n=0
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ "$n" -gt 0 ] && printf ','
+                printf '"%s"' "$(jesc "$line")"
+                n=$((n + 1))
+            done < "$TMP/diff.out"
+            printf ']}\n'
+            exit "$rc"
+        fi
 
         echo "--- a: $(label "$a")"
         echo "+++ b: $(label "$b")"
         echo "  '<' only in a    '>' only in b"
         echo
-        # drop header lines that change on every run and would mask real drift
-        strip() { grep -vE '^(distro-drift [0-9]|Done —|dpkg index|host: | *cruft report:)'; }
-        diff <(strip < "$fa") <(strip < "$fb")
-        rc=$?
+        cat "$TMP/diff.out"
         [ "$rc" -eq 0 ] && echo "  (identical)"
         exit "$rc"
         ;;
     verify)
-        snap=$(resolve_ref "$VERIFY_REF") || exit 2
+        snap=$(resolve_ref "$VERIFY_REF" 2>"$TMP/e") || ref_die 2 "$TMP/e"
         if [ -z "$snap" ] || [ "$snap" = "now" ]; then
-            echo "distro-drift: --verify needs a stored snapshot, not 'now'" >&2
-            echo "  see:  distro-drift --snapshots" >&2
-            exit 2
+            die 2 "--verify needs a stored snapshot, not 'now'" \
+                "see: distro-drift --snapshots"
         fi
         if [ ! -r "$snap" ]; then
-            echo "distro-drift: cannot read snapshot: $snap" >&2
-            echo "  (snapshots are mode 0600 — try: sudo distro-drift --verify)" >&2
-            exit 2
+            die 2 "cannot read snapshot: $snap" \
+                "snapshots are mode 0640 (older ones 0600) — try: sudo distro-drift --verify"
         fi
         verify_snapshot "$snap"
         exit $?
