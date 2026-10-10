@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.3.0] - 2026-10-10
 
 ### Added
 - `--json` flag: machine-readable JSON output for `--snapshots` and `--diff` —
@@ -41,8 +41,6 @@ This project follows [Semantic Versioning](https://semver.org/).
 - Sections 5–7 iterate unowned paths with `while read` instead of `for x in
   $(...)`: paths containing spaces no longer break the report (previously
   each such path was split into garbage entries).
-
-### Fixed
 - `--save` writes snapshots atomically: report goes to a temp file in the
   snapshot dir, `chmod 600` is applied there, then a rename installs it. An
   interrupted `--save` (Ctrl+C, full disk) no longer leaves a partial
