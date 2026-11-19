@@ -61,6 +61,17 @@ The noise filter is the heredoc in `write_noise_filter`. It is the tuning knob
 of section 4. Adding a pattern there is the correct fix for a false positive —
 do not add ad-hoc `grep -v` inside individual sections.
 
+The noise filter only filters *printed* lines; it cannot make a slow scan
+faster. Section 4 therefore has a second, separate exclusion mechanism: the
+`$TMP/cruft-ignore` file passed to `cruft-ng -I`. That list is about runtime,
+not noise. Entries are literal path prefixes — cruft-ng appends a trailing `/`
+and does no glob expansion, so `/tmp/.mount_*` would match nothing. cruft-ng
+already skips `/home`, `/mnt`, `/tmp`, `/root` and `/dev` itself; the entries
+that matter are the big non-dpkg content stores (`/timeshift`,
+`/var/lib/flatpak`, container layers). On a Timeshift+Flatpak machine those are
+11.6M of 16M paths: without them section 4 takes 34 minutes, with them about a
+minute.
+
 Optional tools (`debsums`, `cruft-ng`, `apt-forktracer`) must be probed with
 `command -v` and skipped with a one-line "not installed" hint. Never make them
 hard dependencies.
@@ -84,7 +95,8 @@ is the upgrade path if it ever bites.
 - `tests/` are CLI-surface tests only. Do not add tests that require root or a
   real dpkg database — the `smoke` CI job covers that.
 - The noise filter heredoc in `write_noise_filter` is the only place to add
-  section-4 exclusions. Never add `grep -v` inside individual sections.
+  section-4 *output* exclusions. Never add `grep -v` inside individual
+  sections. (The `cruft-ignore` list above is a runtime knob, not a filter.)
 - Do not add new shellcheck disable directives without justification.
 
 ## Testing constraints

@@ -7,13 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Section 4: `cruft-ng` is now invoked with a generated ignore file
-  (`$TMP/cruft-ignore`) passed via `-I`, covering `/home`, `/media`, `/mnt`,
-  `/run/user` and AppImage/FUSE mounts (`/tmp/.mount_*`) in addition to the
-  system `/etc/cruft/ignore` (whose contents are appended; `-I` replaces the
-  default path). Previously cruft-ng scanned all of `/home`, which on machines
-  with large home directories or network/FUSE mounts made section 4 run for
-  tens of minutes with no output (looking stuck) and could block indefinitely
-  on an unresponsive FUSE daemon. The `sub` label and output format are
+  (`$TMP/cruft-ignore`) passed via `-I`, covering the big non-dpkg content
+  stores — `/timeshift`, `/var/lib/flatpak`, `/var/lib/docker`,
+  `/var/lib/snapd`, `/var/lib/containers` — plus `/home`, `/media`, `/mnt` and
+  `/run/user`, in addition to the system `/etc/cruft/ignore` (whose contents
+  are appended; `-I` replaces the default path). cruft-ng prints only once the
+  scan ends, so on a machine with Timeshift snapshots and Flatpak runtimes
+  section 4 ran for 34 minutes with no output, looking stuck at 4/9. Those two
+  stores alone account for 11.6M of the 16M paths cruft-ng walks; excluding
+  them brings the scan to about a minute. The `sub` label and output format are
   unchanged.
 
 ### Fixed

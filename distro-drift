@@ -155,6 +155,7 @@ EXAMPLES
 OPTIONAL COMPANION TOOLS (used when present)
   debsums          checksum verification of package files
   cruft-ng         non-packaged file analysis using Debian rulesets
+                   (skips /home, /timeshift, flatpak/docker/snap stores)
   apt-forktracer   packages whose version does not come from official repos
 
 TO TRACK FUTURE CHANGES rather than reconstruct them after the fact:
@@ -636,14 +637,19 @@ else
 fi
 if command -v cruft-ng >/dev/null 2>&1; then
     sub "cruft-ng  (Debian rulesets; expect false positives — see upstream docs)"
-    # cruft-ng walks everything not ignored and prints only once the scan
-    # ends, so scanning /home or a hung FUSE mount looks like a freeze and
-    # takes tens of minutes. -I replaces the default ignore file, so build
-    # one in $TMP: these defaults plus the admin's /etc/cruft/ignore if any.
-    # (The noise filter only filters printed lines; it cannot stop the scan.)
+    # cruft-ng prints only once the scan ends, so a slow scan looks like a
+    # freeze. It already skips /home, /mnt, /tmp, /root and /dev itself; what
+    # it does not skip is the big non-dpkg content stores, which on a
+    # Timeshift+Flatpak machine are 11.6M of 16M paths and turn this into a
+    # 34-minute wait. -I replaces the default ignore file, so build one in
+    # $TMP: these defaults plus the admin's /etc/cruft/ignore if any.
+    # Entries are literal path prefixes (cruft-ng appends a trailing /);
+    # globs are not expanded, so /tmp/.mount_* would match nothing.
     {
-        printf '%s\n' '/home' '/media' '/mnt' '/run/user' '/tmp/.mount_*'
-        [ -f /etc/cruft/ignore ] && cat /etc/cruft/ignore
+        printf '%s\n' '/home' '/media' '/mnt' '/run/user' \
+            '/timeshift' '/var/lib/flatpak' '/var/lib/docker' \
+            '/var/lib/snapd' '/var/lib/containers'
+        if [ -f /etc/cruft/ignore ]; then cat /etc/cruft/ignore; fi
     } > "$TMP/cruft-ignore"
     cruft-ng -I "$TMP/cruft-ignore" 2>/dev/null | head -100 | sed 's/^/  /'
 elif command -v cruft >/dev/null 2>&1; then
