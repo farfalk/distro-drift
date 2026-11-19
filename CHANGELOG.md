@@ -3,6 +3,19 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Section 4: `cruft-ng` is now invoked with a generated ignore file
+  (`$TMP/cruft-ignore`) passed via `-I`, covering `/home`, `/media`, `/mnt`,
+  `/run/user` and AppImage/FUSE mounts (`/tmp/.mount_*`) in addition to the
+  system `/etc/cruft/ignore` (whose contents are appended; `-I` replaces the
+  default path). Previously cruft-ng scanned all of `/home`, which on machines
+  with large home directories or network/FUSE mounts made section 4 run for
+  tens of minutes with no output (looking stuck) and could block indefinitely
+  on an unresponsive FUSE daemon. The `sub` label and output format are
+  unchanged.
+
 ## [1.3.0] - 2026-10-10
 
 ### Added
