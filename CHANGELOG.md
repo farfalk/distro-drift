@@ -5,7 +5,18 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- A spinner with elapsed seconds on stderr while the slow probes run
+  (`dpkg --verify`, `debsums`, `cruft-ng`), so a long section no longer looks
+  frozen. Drawn only when stderr is a tty; silent in logs, CI and `--json`.
+
 ### Changed
+- Section 4: the `cruft-ng` output budget is split per block instead of one
+  `head -100` over the whole stream. `---- missing: dpkg ----` gets 20 lines
+  and `---- unexplained: / ----` gets 80. Previously the first block — mostly
+  ruleset false positives such as plymouth animation frames and EFI fonts —
+  ate the budget, and the second block, the files no package owns, was cut off
+  after roughly 28 lines.
 - Section 4: `cruft-ng` is now invoked with a generated ignore file
   (`$TMP/cruft-ignore`) passed via `-I`, covering the big non-dpkg content
   stores — `/timeshift`, `/var/lib/flatpak`, `/var/lib/docker`,

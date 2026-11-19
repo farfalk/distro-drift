@@ -349,6 +349,35 @@ progress_done() {
     exec 4>&-
 }
 
+# Show a spinner and elapsed seconds on fd 4 while a command runs. The command
+# stays in the foreground, so its stdin and exit status are untouched; only the
+# spinner is backgrounded. Silent when fd 4 is not a tty (logs, CI, --json).
+progress_run() {
+    local label="$1"; shift
+    local start=$SECONDS spin="" rc
+    if [ -t 4 ]; then
+        (
+            frames="|/-\\"
+            i=0
+            while :; do
+                i=$(( (i + 1) % 4 ))
+                printf '\r%-72s' \
+                    "distro-drift:      $label ${frames:i:1} $((SECONDS - start))s" >&4
+                sleep 1
+            done
+        ) &
+        spin=$!
+    fi
+    "$@"
+    rc=$?
+    if [ -n "$spin" ]; then
+        kill "$spin" 2>/dev/null
+        wait "$spin" 2>/dev/null
+        printf '\r%-72s\r' '' >&4
+    fi
+    return "$rc"
+}
+
 # usrmerge normalisation: dpkg records some paths as /bin/... and others as
 # /usr/bin/.... Without this we get hundreds of false positives.
 norm() { sed -E 's#^/bin/#/usr/bin/#; s#^/sbin/#/usr/sbin/#; s#^/lib/#/usr/lib/#'; }
@@ -563,13 +592,16 @@ exec >&3 2>&1
 # ── 3 ──────────────────────────────────────────────────────────────
 exec > "$TMP/section.3" 2>&1
 if want 3; then progress_show 3; sec 3
+dpkg_verify() { dpkg --verify 2>/dev/null | sed 's/^/  /'; }
+debsums_ec()  { debsums -ec 2>/dev/null | sed 's/^/  /'; }
+debsums_c()   { debsums -c  2>/dev/null | sed 's/^/  /'; }
 sub "dpkg --verify   (trailing 'c' means config file — modification expected)"
-dpkg --verify 2>/dev/null | sed 's/^/  /' || none
+progress_run "dpkg --verify" dpkg_verify || none
 if command -v debsums >/dev/null 2>&1; then
     sub "debsums: modified config files"
-    debsums -ec 2>/dev/null | sed 's/^/  /' || none
+    progress_run "debsums -ec" debsums_ec || none
     sub "debsums: modified non-config files  (more suspicious)"
-    debsums -c 2>/dev/null | sed 's/^/  /' || none
+    progress_run "debsums -c" debsums_c || none
 else
     sub "debsums not installed"; echo "  sudo apt install debsums"
 fi
@@ -651,7 +683,22 @@ if command -v cruft-ng >/dev/null 2>&1; then
             '/var/lib/snapd' '/var/lib/containers'
         if [ -f /etc/cruft/ignore ]; then cat /etc/cruft/ignore; fi
     } > "$TMP/cruft-ignore"
-    cruft-ng -I "$TMP/cruft-ignore" 2>/dev/null | head -100 | sed 's/^/  /'
+    # cruft-ng emits two blocks: "missing: dpkg" (files dpkg expects but that
+    # are gone — mostly ruleset false positives) and "unexplained: /" (files no
+    # package owns — the part worth reading). A single head -100 over the whole
+    # stream lets the first block eat the budget, so give each its own.
+    cruft_scan() {
+        cruft-ng -I "$TMP/cruft-ignore" 2>/dev/null | awk '
+            /^---- / { sec++; n = 0; print; next }
+            {
+                lim = (sec == 1) ? 20 : 80
+                if (n < lim) print
+                n++
+                if (sec >= 2 && n >= lim) exit
+            }
+        ' | sed 's/^/  /'
+    }
+    progress_run "cruft-ng" cruft_scan
 elif command -v cruft >/dev/null 2>&1; then
     sub "cruft"; cruft 2>/dev/null | head -100 | sed 's/^/  /'
 else

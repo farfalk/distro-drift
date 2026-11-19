@@ -72,6 +72,20 @@ that matter are the big non-dpkg content stores (`/timeshift`,
 11.6M of 16M paths: without them section 4 takes 34 minutes, with them about a
 minute.
 
+The `cruft-ng` output budget is split per block, not one `head -100` over the
+whole stream: `---- missing: dpkg ----` gets 20 lines and
+`---- unexplained: / ----` gets 80. The first block is mostly ruleset false
+positives and would otherwise starve the second, which is the part worth
+reading.
+
+Progress goes to fd 4, a saved copy of stderr, because each section does
+`exec > file 2>&1` and would otherwise swallow it. `progress_show` prints the
+section counter; `progress_run LABEL CMD` draws a spinner with elapsed seconds
+while `CMD` runs. `progress_run` keeps `CMD` in the foreground and backgrounds
+only the spinner, so stdin and the exit status are untouched — do not "simplify"
+it by backgrounding the command. Both are silent when fd 4 is not a tty, which
+is what keeps logs, CI and `--json` clean.
+
 Optional tools (`debsums`, `cruft-ng`, `apt-forktracer`) must be probed with
 `command -v` and skipped with a one-line "not installed" hint. Never make them
 hard dependencies.
