@@ -63,14 +63,21 @@ do not add ad-hoc `grep -v` inside individual sections.
 
 The noise filter only filters *printed* lines; it cannot make a slow scan
 faster. Section 4 therefore has a second, separate exclusion mechanism: the
-`$TMP/cruft-ignore` file passed to `cruft-ng -I`. That list is about runtime,
-not noise. Entries are literal path prefixes — cruft-ng appends a trailing `/`
-and does no glob expansion, so `/tmp/.mount_*` would match nothing. cruft-ng
-already skips `/home`, `/mnt`, `/tmp`, `/root` and `/dev` itself; the entries
-that matter are the big non-dpkg content stores (`/timeshift`,
-`/var/lib/flatpak`, container layers). On a Timeshift+Flatpak machine those are
-11.6M of 16M paths: without them section 4 takes 34 minutes, with them about a
-minute.
+`$TMP/cruft-ignore` file passed to `cruft-ng -I`. Entries are literal path
+prefixes — cruft-ng appends a trailing `/` and does no glob expansion, so
+`/tmp/.mount_*` would match nothing. cruft-ng already skips `/home`, `/mnt`,
+`/tmp`, `/root` and `/dev` itself.
+
+That list serves two purposes, and a new entry should say which one it is for:
+
+- **Runtime.** The big non-dpkg content stores (`/timeshift`,
+  `/var/lib/flatpak`, container layers). On a Timeshift+Flatpak machine those
+  are 11.6M of 16M paths: without them section 4 takes 34 minutes, with them
+  about a minute.
+- **Noise.** Trees where *every* file is unowned by definition, so listing them
+  is pure noise. `/boot/efi` is the case in point: the ESP is written by
+  `grub-install`, shim and Windows, and its hundreds of Windows Boot Manager
+  files fill the whole `unexplained` budget on their own.
 
 The `cruft-ng` output budget is split per block, not one `head -100` over the
 whole stream: `---- missing: dpkg ----` gets 20 lines and

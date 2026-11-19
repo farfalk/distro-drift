@@ -17,6 +17,10 @@ This project follows [Semantic Versioning](https://semver.org/).
   ruleset false positives such as plymouth animation frames and EFI fonts —
   ate the budget, and the second block, the files no package owns, was cut off
   after roughly 28 lines.
+- Section 4: `/boot/efi` is added to the `cruft-ng` ignore list. The ESP is
+  written by `grub-install`, shim and Windows, so no package owns anything on
+  it; its hundreds of Windows Boot Manager files filled the entire 80-line
+  `---- unexplained: / ----` budget and hid every other unowned file.
 - Section 4: `cruft-ng` is now invoked with a generated ignore file
   (`$TMP/cruft-ignore`) passed via `-I`, covering the big non-dpkg content
   stores — `/timeshift`, `/var/lib/flatpak`, `/var/lib/docker`,

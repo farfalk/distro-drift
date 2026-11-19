@@ -677,10 +677,14 @@ if command -v cruft-ng >/dev/null 2>&1; then
     # $TMP: these defaults plus the admin's /etc/cruft/ignore if any.
     # Entries are literal path prefixes (cruft-ng appends a trailing /);
     # globs are not expanded, so /tmp/.mount_* would match nothing.
+    # /boot/efi is here for noise, not speed: the ESP is written by
+    # grub-install, shim and Windows, so no package owns anything on it and
+    # its hundreds of Windows Boot Manager files would fill the whole
+    # "unexplained" budget on their own.
     {
         printf '%s\n' '/home' '/media' '/mnt' '/run/user' \
             '/timeshift' '/var/lib/flatpak' '/var/lib/docker' \
-            '/var/lib/snapd' '/var/lib/containers'
+            '/var/lib/snapd' '/var/lib/containers' '/boot/efi'
         if [ -f /etc/cruft/ignore ]; then cat /etc/cruft/ignore; fi
     } > "$TMP/cruft-ignore"
     # cruft-ng emits two blocks: "missing: dpkg" (files dpkg expects but that
