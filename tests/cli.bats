@@ -327,3 +327,19 @@ setup_fake_snapshots() {
     [[ "$output" == *'"error":'* ]]
     [[ "$output" == *'root'* ]]
 }
+
+@test "--snapshots --json escapes quotes, backslashes and spaces in names" {
+    command -v python3 >/dev/null || skip "python3 not available"
+    export DISTRO_DRIFT_SNAPDIR="${BATS_TEST_TMPDIR}/esc"
+    mkdir -p "$DISTRO_DRIFT_SNAPDIR"
+    : > "$DISTRO_DRIFT_SNAPDIR/2026-01-01-0000\"q.txt"
+    : > "$DISTRO_DRIFT_SNAPDIR/2026-01-02-0000\\b.txt"
+    : > "$DISTRO_DRIFT_SNAPDIR/2026-01-03-0000 space.txt"
+    run "$DD" --snapshots --json
+    [ "$status" -eq 0 ]
+    echo "$output" | python3 -c '
+import json, sys
+names = sorted(s["name"] for s in json.load(sys.stdin)["snapshots"])
+assert names == ["2026-01-01-0000\"q", "2026-01-02-0000\\b", "2026-01-03-0000 space"], names
+'
+}

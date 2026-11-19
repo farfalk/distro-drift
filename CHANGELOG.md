@@ -16,6 +16,14 @@ This project follows [Semantic Versioning](https://semver.org/).
   on an unresponsive FUSE daemon. The `sub` label and output format are
   unchanged.
 
+### Fixed
+- `--json`: a `mktemp` failure now emits a JSON error object instead of
+  exiting 1 with empty stdout (the last non-zero exit that bypassed `die`).
+- `--snapshots` (text and JSON) reads snapshot names with `IFS= read -r`, so a
+  name containing a space or tab is no longer truncated.
+- `--json`: an ambiguous snapshot reference now carries every candidate name in
+  the error `hint`, not just the first.
+
 ## [1.3.0] - 2026-10-10
 
 ### Added

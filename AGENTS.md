@@ -72,6 +72,13 @@ not secrets. The `chmod`+`chgrp` happen on the temp file before the atomic
 rename — the final file is never world-readable even briefly. Existing
 snapshots stay `0600` until re-saved.
 
+`jesc()` passes valid UTF-8 through raw and escapes only backslash, quote and
+C0 control chars. A path containing invalid UTF-8 bytes therefore yields
+invalid JSON — accepted limit: snapshot names are ASCII and user paths with
+invalid UTF-8 are rare. Do not "fix" this by escaping every non-ASCII byte as
+`\u00XX`: that mangles valid UTF-8 (`café` → `cafÃ©`). A UTF-8-aware escaper
+is the upgrade path if it ever bites.
+
 ## Do not modify
 
 - `tests/` are CLI-surface tests only. Do not add tests that require root or a

@@ -89,7 +89,7 @@ die() {
 ref_die() {
     if [ "$JSON" = 1 ]; then
         die "$1" "$(sed -n 1p "$2" | sed 's/^distro-drift: //')" \
-                 "$(sed -n 2p "$2" | sed 's/^  //')"
+                 "$(sed -n '2,$p' "$2" | sed 's/^  //' | paste -sd ' ' -)"
     else
         cat "$2" >&2
         exit "$1"
@@ -265,7 +265,7 @@ if [ "$MODE" = snapshots ]; then
         printf '{"schema":1,"tool":"distro-drift","version":"%s","generated":"%s","snapshots":[' \
             "$VERSION" "$(date -Is)"
         i=0; first=1
-        while read -r f; do
+        while IFS= read -r f; do
             [ "$first" -eq 1 ] || printf ','
             first=0
             printf '{"ref":"@%s","name":"%s","size_bytes":%s,"age_days":%s,"path":"%s"}' \
@@ -282,7 +282,7 @@ if [ "$MODE" = snapshots ]; then
     if [ -d "$SNAPDIR" ] && snapshot_list | grep -q .; then
         printf '  %-6s %-22s %8s  %s\n' REF NAME SIZE AGE
         i=0
-        while read -r f; do
+        while IFS= read -r f; do
             printf '  %-6s %-22s %8s  %s days ago\n' \
                 "@$i" "$(basename "$f" .txt)" \
                 "$(du -h "$f" | cut -f1)" \
@@ -307,7 +307,7 @@ if [ "$NEEDS_ROOT" = 1 ] && [ "$(id -u)" -ne 0 ]; then
         "(comparing two stored snapshots does not need root)"
 fi
 
-TMP=$(mktemp -d) || exit 1
+TMP=$(mktemp -d) || die 1 "cannot create temporary directory"
 trap 'rm -rf "$TMP"' EXIT
 
 want() { case " $SECTIONS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
